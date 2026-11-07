@@ -1,0 +1,36 @@
+{
+  "benchmark_version": "1.0.0",
+  "dataset": "tests/fixtures",
+  "model": "qwen3-vl:8b",
+  "pipeline_version": "2.0.0",
+  "generated_at": "2026-11-07T20:52:49.302927+00:00",
+  "total_invoices": 1,
+  "successful_invoices": 0,
+  "field_accuracy": {
+    "invoice_number": null,
+    "supplier_name": null,
+    "invoice_date": null,
+    "due_date": null,
+    "currency": null,
+    "subtotal": null,
+    "total_vat": null,
+    "invoice_total": null,
+    "vat_breakdown": null,
+    "line_items": null
+  },
+  "overall_field_accuracy": null,
+  "whole_invoice_exact_match_rate": 0.0,
+  "extraction_failure_rate": 1.0,
+  "average_processing_time_ms": null,
+  "p95_processing_time_ms": null,
+  "critical_false_accept_rate": null,
+  "validation_failure_rate": null,
+  "manual_review_rate": null,
+  "invoices": [
+    {
+      "id": "invoice_001",
+      "status": "failed",
+      "error": "Ollama returned invalid JSON or data that did not match the invoice schema"
+    }
+  ]
+}

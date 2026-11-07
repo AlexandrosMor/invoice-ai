@@ -1,0 +1,38 @@
+{
+  "supplier_name": "Northwind Office Supplies B.V.",
+  "invoice_number": "NW-2026-001",
+  "invoice_date": "2026-04-12",
+  "due_date": "2026-05-12",
+  "currency": "EUR",
+  "subtotal": "25.00",
+  "total_vat": "4.65",
+  "invoice_total": "29.65",
+  "vat_breakdown": [
+    {
+      "rate": "21",
+      "taxable_amount": "20.00",
+      "tax_amount": "4.20"
+    },
+    {
+      "rate": "9",
+      "taxable_amount": "5.00",
+      "tax_amount": "0.45"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Paper (A4)",
+      "quantity": "2",
+      "unit_price": "10.00",
+      "vat_rate": "21",
+      "line_total": "20.00"
+    },
+    {
+      "description": "Pens (blue)",
+      "quantity": "1",
+      "unit_price": "5.00",
+      "vat_rate": "9",
+      "line_total": "5.00"
+    }
+  ]
+}

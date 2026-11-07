@@ -1,3 +1,5 @@
+import os
+os.environ["DATABASE_URL"]="sqlite://"
 from decimal import Decimal
 from app import Invoice, validate, MoneybirdAdapter
 

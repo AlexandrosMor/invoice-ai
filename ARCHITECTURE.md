@@ -21,3 +21,14 @@ The SQLAlchemy `Record` is the local repository boundary in this small PoC. It p
 Approval requires a successful validation. Export and sync require `APPROVED`. The `AccountingAdapter` abstraction currently has a `MoneybirdAdapter` mock that maps canonical fields and optional customer mapping configuration into a simulated draft request. Successful sync results are saved and subsequent requests return the prior result, preventing duplicate mock creation. No undocumented external API behavior or credentials are assumed.
 
 The local file root is generated from application configuration, and disk names use generated UUIDs rather than user filenames. User filenames are reduced to a basename for display. File size, extension, signature, PDF page count, and image decoding are checked. The UI does not display document content in backend logs.
+
+
+## Extraction engine (v2)
+
+The incremental engine is split across `document_processing.py`, `extraction.py`, `invoice_domain.py`, and `validation.py`. PDFs are classified page by page from embedded text; all pages are rendered with PyMuPDF so mixed and scanned invoices retain visual layout. Rotated page rendering is normalized by PyMuPDF, image EXIF rotation is applied, and embedded text is passed as context without treating it as a reliable table parser.
+
+The canonical invoice is stored separately from extraction metadata. Metadata includes model/pipeline versions, deterministic options, duration, status, page kind, evidence, and correction history. Evidence snippets and boxes are emitted only where a value is matched against actual embedded PDF spans; scanned pages receive no invented OCR evidence and require review. SQLite gets an additive `extraction_json` migration and a separate audit table. On restart, records left in `PROCESSING` are marked failed with a recovery event; they are not silently reprocessed.
+
+Validation uses `Decimal`, configurable `INVOICE_ROUNDING_TOLERANCE`, and ERROR/WARNING/INFO issues. It runs immediately after extraction and again after a user requests validation. Warnings remain visible while explicit approval remains a separate human action. `READY_FOR_REVIEW`, `NEEDS_ATTENTION`, and `VALIDATION_FAILED` are assessment labels and do not replace persisted workflow statuses.
+
+The benchmark command invokes the configured local model and compares output to manually maintained ground truth. It writes measured results to `tests/fixtures/results.json`; absence of this file is the true empty state in the Evaluation page. See README for metric and null-handling definitions. The included dataset contains one synthetic invoice only and provides no evidence of general-world accuracy.

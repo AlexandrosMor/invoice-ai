@@ -3,34 +3,138 @@
   "dataset": "tests/fixtures",
   "model": "qwen3-vl:8b",
   "pipeline_version": "2.0.0",
-  "generated_at": "2026-11-07T20:52:49.302927+00:00",
+  "generated_at": "2026-11-07T20:58:01.837066+00:00",
   "total_invoices": 1,
-  "successful_invoices": 0,
+  "successful_invoices": 1,
   "field_accuracy": {
-    "invoice_number": null,
-    "supplier_name": null,
-    "invoice_date": null,
-    "due_date": null,
-    "currency": null,
-    "subtotal": null,
-    "total_vat": null,
-    "invoice_total": null,
-    "vat_breakdown": null,
-    "line_items": null
+    "invoice_number": 1.0,
+    "supplier_name": 1.0,
+    "invoice_date": 1.0,
+    "due_date": 1.0,
+    "currency": 0.0,
+    "subtotal": 0.0,
+    "total_vat": 0.0,
+    "invoice_total": 1.0,
+    "vat_breakdown": 0.0,
+    "line_items": 1.0
   },
-  "overall_field_accuracy": null,
+  "overall_field_accuracy": 0.6,
   "whole_invoice_exact_match_rate": 0.0,
-  "extraction_failure_rate": 1.0,
-  "average_processing_time_ms": null,
-  "p95_processing_time_ms": null,
-  "critical_false_accept_rate": null,
-  "validation_failure_rate": null,
-  "manual_review_rate": null,
+  "extraction_failure_rate": 0.0,
+  "average_processing_time_ms": 109931.93,
+  "p95_processing_time_ms": 109931.93,
+  "critical_false_accept_rate": 0.0,
+  "validation_failure_rate": 0.0,
+  "manual_review_rate": 1.0,
   "invoices": [
     {
       "id": "invoice_001",
-      "status": "failed",
-      "error": "Ollama returned invalid JSON or data that did not match the invoice schema"
+      "status": "succeeded",
+      "duration_ms": 109931.93,
+      "expected": {
+        "supplier_name": "Northwind Office Supplies B.V.",
+        "invoice_number": "NW-2026-001",
+        "invoice_date": "2026-04-12",
+        "due_date": "2026-05-12",
+        "currency": "EUR",
+        "subtotal": "25.00",
+        "total_vat": "4.65",
+        "invoice_total": "29.65",
+        "vat_breakdown": [
+          {
+            "rate": "21",
+            "taxable_amount": "20.00",
+            "tax_amount": "4.20"
+          },
+          {
+            "rate": "9",
+            "taxable_amount": "5.00",
+            "tax_amount": "0.45"
+          }
+        ],
+        "line_items": [
+          {
+            "description": "Paper (A4)",
+            "quantity": "2",
+            "unit_price": "10.00",
+            "vat_rate": "21",
+            "line_total": "20.00"
+          },
+          {
+            "description": "Pens (blue)",
+            "quantity": "1",
+            "unit_price": "5.00",
+            "vat_rate": "9",
+            "line_total": "5.00"
+          }
+        ]
+      },
+      "extracted": {
+        "supplier_name": "Northwind Office Supplies B.V.",
+        "supplier_address": "Prinsengracht 100, 1015 EA Amsterdam",
+        "supplier_vat_number": "NL123456789B01",
+        "supplier_kvk_number": null,
+        "supplier_iban": null,
+        "invoice_number": "NW-2026-001",
+        "invoice_date": "2026-04-12",
+        "due_date": "2026-05-12",
+        "currency": null,
+        "purchase_order_reference": null,
+        "document_type": null,
+        "subtotal": null,
+        "vat_breakdown": [],
+        "total_vat": null,
+        "invoice_total": "29.65",
+        "line_items": [
+          {
+            "description": "Paper (A4)",
+            "quantity": "2",
+            "unit_price": "10.0",
+            "vat_rate": "21",
+            "line_total": "20.0"
+          },
+          {
+            "description": "Pens (blue)",
+            "quantity": "1",
+            "unit_price": "5.0",
+            "vat_rate": "9",
+            "line_total": "5.0"
+          }
+        ]
+      },
+      "incorrect_fields": [
+        "currency",
+        "subtotal",
+        "total_vat",
+        "vat_breakdown"
+      ],
+      "validation": {
+        "valid": true,
+        "severity": "WARNING",
+        "issues": [
+          {
+            "severity": "WARNING",
+            "code": "missing_currency",
+            "message": "Currency is missing",
+            "field": "currency"
+          },
+          {
+            "severity": "WARNING",
+            "code": "incomplete_financial_breakdown",
+            "message": "Subtotal or total VAT is missing, so the payable total cannot be reconciled",
+            "field": "invoice_total"
+          }
+        ],
+        "errors": [],
+        "warnings": [
+          "Currency is missing",
+          "Subtotal or total VAT is missing, so the payable total cannot be reconciled"
+        ],
+        "review_assessment": "NEEDS_ATTENTION",
+        "rounding_tolerance": "0.02"
+      },
+      "model": "qwen3-vl:8b",
+      "pipeline_version": "2.0.0"
     }
   ]
 }

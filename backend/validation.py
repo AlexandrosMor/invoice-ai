@@ -37,6 +37,8 @@ def validate(invoice: Invoice, all_invoices: list[Invoice], tolerance: Optional[
         if v is not None and not credit and v<0: add("WARNING","negative_amount",f"Negative {f.replace('_',' ')}; confirm this is a credit note",f)
     if all(v is not None and v.is_finite() for v in vals) and abs(invoice.subtotal+invoice.total_vat-invoice.invoice_total)>tolerance:
         add("ERROR","document_total_mismatch","Subtotal plus VAT does not match invoice total","invoice_total")
+    elif invoice.invoice_total is not None and (invoice.subtotal is None or invoice.total_vat is None):
+        add("WARNING","incomplete_financial_breakdown","Subtotal or total VAT is missing, so the payable total cannot be reconciled","invoice_total")
     line_sum=sum((x.line_total for x in invoice.line_items if x.line_total is not None),Decimal(0))
     complete_lines=bool(invoice.line_items) and all(x.line_total is not None for x in invoice.line_items)
     if complete_lines and invoice.subtotal is not None and abs(line_sum-invoice.subtotal)>tolerance: add("WARNING","line_subtotal_mismatch","Sum of line items does not match subtotal","subtotal")

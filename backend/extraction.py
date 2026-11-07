@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 from invoice_domain import Invoice, FieldEvidence
 from document_processing import ProcessedDocument
+from normalization import normalize_invoice_payload
 
 log=logging.getLogger("invoiceai.extraction")
 PIPELINE_VERSION="2.0.0"
@@ -52,7 +53,7 @@ class InvoiceExtractor:
                     response=client.post(self.url+"/api/chat",json=request); response.raise_for_status()
                 body=response.json(); raw=body.get("message",{}).get("content")
                 if not isinstance(raw,str): raise ValueError("missing message content")
-                invoice=Invoice.model_validate_json(raw)
+                invoice=Invoice.model_validate(normalize_invoice_payload(json.loads(raw)))
                 evidence=derive_evidence(invoice,document)
                 return {"invoice":invoice,"evidence":evidence,"model":self.model,"pipeline_version":PIPELINE_VERSION,"duration_ms":round((time.monotonic()-started)*1000,2),"timestamp":datetime.now(timezone.utc).isoformat(),"attempts":attempt+1,"document_kind":document.document_kind,"status":"succeeded"}
             except httpx.ConnectError as e:

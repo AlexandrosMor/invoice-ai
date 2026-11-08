@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, String, Text, select, inspect, text, update, ForeignKey, Index
 from sqlalchemy import event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+import httpx
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 from invoice_domain import Invoice
@@ -309,7 +310,20 @@ def change_password(payload: PasswordPayload,request: Request,user=Depends(curre
     return {"ok":True,"message":"Password changed. Sign in again on your devices."}
 
 @app.get("/api/health")
-def health(): return {"ok":True,"ollama_url":os.getenv("OLLAMA_URL","http://localhost:11434"),"model":os.getenv("OLLAMA_MODEL","qwen3-vl:8b")}
+def health():
+    ollama_url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
+    model=os.getenv("OLLAMA_MODEL","qwen3-vl:8b")
+    ollama_available=False
+    model_available=False
+    try:
+        response=httpx.get(ollama_url+"/api/tags",timeout=httpx.Timeout(2.0,connect=1.0))
+        response.raise_for_status()
+        ollama_available=True
+        models=response.json().get("models",[])
+        model_available=any(item.get("name")==model for item in models if isinstance(item,dict))
+    except (httpx.HTTPError,ValueError):
+        pass
+    return {"ok":True,"ollama_url":ollama_url,"ollama_available":ollama_available,"model":model,"model_available":model_available}
 
 @app.get("/api/benchmarks/latest")
 def latest_benchmark():

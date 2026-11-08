@@ -81,6 +81,21 @@ Open http://localhost:5173. Vite forwards `/api` calls to the backend.
 4. Run deterministic validation. Resolve errors, then explicitly approve.
 5. Download canonical JSON or use **Sync Moneybird** to get a mock draft result. No document is sent to Moneybird.
 
+## 🔌 Developer API
+
+Create a scoped API key from **My Profile → API Keys**, then send it as a Bearer token. For local development:
+
+```bash
+export INVOICEAI_API_KEY="YOUR_API_KEY"
+curl -X POST http://localhost:8000/api/v1/invoices \
+  -H "Authorization: Bearer $INVOICEAI_API_KEY" \
+  -F "file=@invoice.pdf"
+```
+
+The upload returns `202 Accepted` and an invoice ID while local extraction continues. Use `GET /api/v1/invoices/{id}` to check status, then `GET /api/v1/invoices/{id}/json` after processing completes. API keys only access the invoices and scopes of their owner. Use HTTPS outside local development.
+
+See [docs/API.md](docs/API.md) for scopes, endpoints, pagination, errors, rate limits, and a polling example.
+
 Invoices are scoped to the signed-in account. The browser uses an HttpOnly session cookie, a readable CSRF token cookie/header pair, and same-site cookie settings. Sessions expire after 14 days. Passwords are hashed with Argon2id; authentication attempts are rate-limited in process memory. Set `COOKIE_SECURE=true` behind HTTPS. For a different frontend origin, set `FRONTEND_ORIGIN` for the backend.
 
 ### 🗃️ Existing SQLite data

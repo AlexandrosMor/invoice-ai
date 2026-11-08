@@ -5,13 +5,14 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, Depends, Request, Header
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, Depends, Request, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import create_engine, String, Text, select, inspect, text, update, ForeignKey, Index
 from sqlalchemy import event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -54,6 +55,18 @@ class LoginSession(Base):
     token_hash: Mapped[str]=mapped_column(String(64),unique=True,index=True)
     created_at: Mapped[str]=mapped_column(String,default=lambda:datetime.now(timezone.utc).isoformat())
     expires_at: Mapped[str]=mapped_column(String,index=True)
+    revoked_at: Mapped[Optional[str]]=mapped_column(String,nullable=True)
+class ApiKey(Base):
+    __tablename__="api_keys"
+    id: Mapped[str]=mapped_column(String,primary_key=True,default=lambda:str(uuid.uuid4()))
+    user_id: Mapped[str]=mapped_column(ForeignKey("users.id",ondelete="CASCADE"),index=True)
+    name: Mapped[str]=mapped_column(String(100))
+    key_prefix: Mapped[str]=mapped_column(String(16))
+    key_hash: Mapped[str]=mapped_column(String(64),unique=True,index=True)
+    scopes_json: Mapped[str]=mapped_column(Text)
+    created_at: Mapped[str]=mapped_column(String,default=lambda:datetime.now(timezone.utc).isoformat())
+    last_used_at: Mapped[Optional[str]]=mapped_column(String,nullable=True)
+    expires_at: Mapped[Optional[str]]=mapped_column(String,nullable=True,index=True)
     revoked_at: Mapped[Optional[str]]=mapped_column(String,nullable=True)
 class Record(Base):
     __tablename__ = "invoices"
@@ -105,15 +118,19 @@ async def lifespan(app):
         if interrupted: recovery_db.commit()
     yield
 
-app=FastAPI(title="InvoiceAI", version="0.3.0",lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=[os.getenv("FRONTEND_ORIGIN","http://localhost:5173")], allow_credentials=True, allow_methods=["GET","POST","PATCH","OPTIONS"], allow_headers=["Content-Type","X-CSRF-Token"])
+app=FastAPI(title="InvoiceAI", version="0.4.0",lifespan=lifespan,openapi_tags=[{"name":"Developer API v1","description":"Versioned invoice API authenticated with scoped bearer API keys."}])
+app.add_middleware(CORSMiddleware, allow_origins=[os.getenv("FRONTEND_ORIGIN","http://localhost:5173")], allow_credentials=True, allow_methods=["GET","POST","PATCH","DELETE","OPTIONS"], allow_headers=["Content-Type","Authorization","X-CSRF-Token"])
 
 PASSWORDS=PasswordHasher()
 SESSION_DAYS=14
 SESSION_COOKIE="invoiceai_session"
 CSRF_COOKIE="invoiceai_csrf"
 AUTH_ATTEMPTS={}
+API_RATE_EVENTS={}
 EMAIL_PATTERN=re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]{2,}$")
+API_KEY_PATTERN=re.compile(r"^invai_[A-Za-z0-9_-]{43}$")
+API_SCOPES={"invoices:read","invoices:write","invoices:document:read"}
+API_BEARER=HTTPBearer(auto_error=False,scheme_name="InvoiceAI API Key",description="Use a scoped API key from Profile as `Bearer invai_…`.")
 
 class RegisterPayload(BaseModel):
     first_name: str=Field(min_length=1,max_length=100)
@@ -124,6 +141,55 @@ class RegisterPayload(BaseModel):
 class LoginPayload(BaseModel): email: str; password: str
 class ProfilePayload(BaseModel): first_name: str=Field(min_length=1,max_length=100); last_name: str=Field(min_length=1,max_length=100); company_name: str=Field(min_length=1,max_length=200); email: str=Field(min_length=3,max_length=320)
 class PasswordPayload(BaseModel): current_password: str; new_password: str=Field(min_length=12,max_length=256)
+class ApiKeyCreatePayload(BaseModel):
+    name: str=Field(min_length=1,max_length=100)
+    scopes: list[Literal["invoices:read","invoices:write","invoices:document:read"]]=Field(default_factory=lambda:["invoices:read"],min_length=1)
+    expires_in_days: Optional[int]=Field(default=90,ge=1,le=365)
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls,value):
+        value=value.strip()
+        if not value: raise ValueError("Enter a name for this API key")
+        return value
+    @field_validator("scopes")
+    @classmethod
+    def unique_scopes(cls,value):
+        if len(value)!=len(set(value)): raise ValueError("Do not select a permission more than once")
+        return value
+class DeveloperUploadResponse(BaseModel):
+    id: str
+    status: str
+    message: str
+    status_url: str
+class DeveloperInvoiceSummary(BaseModel):
+    id: str
+    filename: str
+    status: str
+    created_at: str
+    invoice_number: Optional[str]=None
+    supplier_name: Optional[str]=None
+    currency: Optional[str]=None
+    total: Optional[str]=None
+class DeveloperInvoicePage(BaseModel):
+    items: list[DeveloperInvoiceSummary]
+    next_cursor: Optional[str]=None
+class DeveloperInvoiceDetail(BaseModel):
+    id: str
+    filename: str
+    created_at: str
+    status: str
+    supplier_name: Optional[str]=None
+    invoice_number: Optional[str]=None
+    extraction: dict
+    validation: dict
+    approved: bool
+    review_status: str
+    links: dict[str,str]
+class DeveloperInvoiceJson(BaseModel):
+    id: str
+    status: str
+    approved: bool
+    invoice: dict
 
 def normalized_email(value: str) -> str:
     return value.strip().casefold()
@@ -165,6 +231,51 @@ def current_user(request: Request) -> dict:
         user=db.get(User,session.user_id)
         if not user or user.status!="active": raise HTTPException(401,"Sign in to continue")
         return public_user(user)
+
+def api_key_metadata(key: ApiKey) -> dict:
+    return {"id":key.id,"name":key.name,"prefix":key.key_prefix,"scopes":json.loads(key.scopes_json),"created_at":key.created_at,"last_used_at":key.last_used_at,"expires_at":key.expires_at,"revoked_at":key.revoked_at}
+
+def check_api_rate_limit(key_id: str):
+    try: limit=max(1,min(int(os.getenv("API_RATE_LIMIT_PER_MINUTE","120")),10000))
+    except ValueError: limit=120
+    now=time.monotonic()
+    events=[stamp for stamp in API_RATE_EVENTS.get(key_id,[]) if now-stamp<60]
+    if len(events)>=limit:
+        API_RATE_EVENTS[key_id]=events
+        raise HTTPException(429,"API rate limit exceeded. Wait before retrying.",headers={"Retry-After":"60"})
+    events.append(now);API_RATE_EVENTS[key_id]=events
+    if len(API_RATE_EVENTS)>5000:
+        for expired in [key for key,stamps in API_RATE_EVENTS.items() if not stamps or now-stamps[-1]>=60]: API_RATE_EVENTS.pop(expired,None)
+
+def get_api_key_context(credentials: Optional[HTTPAuthorizationCredentials]=Depends(API_BEARER)) -> dict:
+    if not credentials or credentials.scheme.casefold()!="bearer": raise HTTPException(401,"A valid Bearer API key is required",headers={"WWW-Authenticate":"Bearer"})
+    raw=credentials.credentials
+    if not API_KEY_PATTERN.fullmatch(raw): raise HTTPException(401,"A valid Bearer API key is required",headers={"WWW-Authenticate":"Bearer"})
+    digest=token_hash(raw)
+    with Session() as db:
+        key=db.scalar(select(ApiKey).where(ApiKey.key_hash==digest))
+        if not key or not hmac.compare_digest(key.key_hash,digest) or key.revoked_at:
+            raise HTTPException(401,"A valid Bearer API key is required",headers={"WWW-Authenticate":"Bearer"})
+        if key.expires_at:
+            try: expired=datetime.fromisoformat(key.expires_at)<=datetime.now(timezone.utc)
+            except ValueError: expired=True
+            if expired: raise HTTPException(401,"This API key has expired",headers={"WWW-Authenticate":"Bearer"})
+        user=db.get(User,key.user_id)
+        if not user or user.status!="active": raise HTTPException(401,"A valid Bearer API key is required",headers={"WWW-Authenticate":"Bearer"})
+        scopes=json.loads(key.scopes_json)
+        check_api_rate_limit(key.id)
+        now=datetime.now(timezone.utc)
+        try: last_used=datetime.fromisoformat(key.last_used_at) if key.last_used_at else None
+        except ValueError: last_used=None
+        if last_used is None or (now-last_used).total_seconds()>=60:
+            key.last_used_at=now.isoformat();db.commit()
+        return {"user":public_user(user),"key_id":key.id,"scopes":scopes}
+
+def require_api_scope(scope: str):
+    def dependency(context: dict=Depends(get_api_key_context)):
+        if scope not in context["scopes"]: raise HTTPException(403,"This API key does not have the required scope: "+scope)
+        return context
+    return dependency
 
 def correction_metadata(previous: dict, corrected: Invoice, metadata: dict) -> tuple[dict,dict]:
     updated=corrected.model_dump(mode="json"); changes={}
@@ -309,6 +420,34 @@ def change_password(payload: PasswordPayload,request: Request,user=Depends(curre
         db.commit()
     return {"ok":True,"message":"Password changed. Sign in again on your devices."}
 
+@app.get("/api/profile/api-keys")
+def list_api_keys(user=Depends(current_user)):
+    with Session() as db:
+        keys=db.scalars(select(ApiKey).where(ApiKey.user_id==user["id"]).order_by(ApiKey.created_at.desc(),ApiKey.id.desc())).all()
+        return [api_key_metadata(key) for key in keys]
+
+@app.post("/api/profile/api-keys",status_code=201,dependencies=[Depends(csrf_protect)])
+def create_api_key(payload: ApiKeyCreatePayload,request: Request,user=Depends(current_user)):
+    rate_limit(request,"api_key_create")
+    raw="invai_"+secrets.token_urlsafe(32)
+    now=datetime.now(timezone.utc)
+    expires_at=(now+timedelta(days=payload.expires_in_days)).isoformat() if payload.expires_in_days is not None else None
+    key=ApiKey(user_id=user["id"],name=payload.name,key_prefix=raw[:14],key_hash=token_hash(raw),scopes_json=json.dumps(payload.scopes),created_at=now.isoformat(),expires_at=expires_at)
+    with Session() as db:
+        db.add(key);db.commit();db.refresh(key)
+        result=api_key_metadata(key)
+    result["api_key"]=raw
+    result["warning"]="Copy this API key now. It will not be shown again."
+    return result
+
+@app.delete("/api/profile/api-keys/{key_id}",dependencies=[Depends(csrf_protect)])
+def revoke_api_key(key_id: str,user=Depends(current_user)):
+    with Session() as db:
+        key=db.scalar(select(ApiKey).where(ApiKey.id==key_id,ApiKey.user_id==user["id"]))
+        if not key: raise HTTPException(404,"API key not found")
+        if not key.revoked_at: key.revoked_at=datetime.now(timezone.utc).isoformat();db.commit()
+        return {"ok":True,"key":api_key_metadata(key)}
+
 @app.get("/api/health")
 def health():
     ollama_url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
@@ -337,8 +476,7 @@ def invoice_audit(invoice_id: str,user=Depends(current_user)):
         rows=db.scalars(select(AuditEvent).where(AuditEvent.invoice_id==invoice_id).order_by(AuditEvent.timestamp)).all()
         return [{"timestamp":x.timestamp,"event_type":x.event_type,"metadata":json.loads(x.metadata_json)} for x in rows]
 
-@app.post("/api/invoices",status_code=202)
-async def upload(background: BackgroundTasks,file: UploadFile=File(...),user=Depends(current_user),_csrf=Depends(csrf_protect)):
+async def store_invoice_upload(file: UploadFile,user_id: str) -> Record:
     ext=Path(file.filename or "").suffix.lower(); allowed={".pdf":"application/pdf",".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png"}
     if ext not in allowed: raise HTTPException(415,"Only PDF, JPG, and PNG are supported")
     content=await file.read(MAX_BYTES+1)
@@ -349,9 +487,17 @@ async def upload(background: BackgroundTasks,file: UploadFile=File(...),user=Dep
         raise HTTPException(415,"File contents do not match the extension")
     ident=str(uuid.uuid4()); clean_name=Path(file.filename or "invoice").name.replace("/","_").replace("\\","_")[:150]; path=DATA/(ident+ext); path.write_bytes(content)
     with Session() as db:
-        r=Record(id=ident,filename=clean_name,path=str(path),mime=mime,status="UPLOADED",user_id=user["id"]); db.add(r); db.commit()
-    background.add_task(process_invoice,ident,user["id"])
-    return {"id":ident,"filename":clean_name,"status":"UPLOADED"}
+        r=Record(id=ident,filename=clean_name,path=str(path),mime=mime,status="UPLOADED",user_id=user_id); db.add(r); db.commit();db.refresh(r)
+        return r
+
+def enqueue_invoice_processing(background: BackgroundTasks,record: Record):
+    background.add_task(process_invoice,record.id,record.user_id)
+
+@app.post("/api/invoices",status_code=202)
+async def upload(background: BackgroundTasks,file: UploadFile=File(...),user=Depends(current_user),_csrf=Depends(csrf_protect)):
+    record=await store_invoice_upload(file,user["id"])
+    enqueue_invoice_processing(background,record)
+    return {"id":record.id,"filename":record.filename,"status":record.status}
 
 @app.get("/api/invoices")
 def list_invoices(search: str="",user=Depends(current_user)):
@@ -374,6 +520,92 @@ def document(invoice_id: str,user=Depends(current_user)):
         r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
         if not r: raise HTTPException(404,"Invoice not found")
         return FileResponse(r.path,media_type=r.mime,filename=r.filename,content_disposition_type="inline")
+
+def api_invoice_summary(record: Record) -> DeveloperInvoiceSummary:
+    try: invoice=json.loads(record.invoice_json or "{}")
+    except ValueError: invoice={}
+    total=invoice.get("invoice_total")
+    return DeveloperInvoiceSummary(id=record.id,filename=record.filename,status=record.status,created_at=record.created_at,invoice_number=invoice.get("invoice_number"),supplier_name=invoice.get("supplier_name"),currency=invoice.get("currency"),total=str(total) if total is not None else None)
+
+def encode_invoice_cursor(record: Record) -> str:
+    raw=json.dumps([record.created_at,record.id],separators=(",",":" )).encode("utf-8")
+    return __import__("base64").urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+def decode_invoice_cursor(cursor: str) -> tuple[str,str]:
+    import base64, binascii
+    try:
+        raw=base64.urlsafe_b64decode(cursor+"="*((4-len(cursor)%4)%4))
+        value=json.loads(raw)
+        if not isinstance(value,list) or len(value)!=2 or not all(isinstance(part,str) and part for part in value): raise ValueError()
+        return value[0],value[1]
+    except (ValueError,TypeError,binascii.Error):
+        raise HTTPException(422,"Invalid cursor")
+
+def api_document_path(record: Record) -> Path:
+    path=Path(record.path).resolve()
+    if not path.is_relative_to(DATA.resolve()) or not path.is_file(): raise HTTPException(404,"Invoice document not found")
+    return path
+
+@app.post("/api/v1/invoices",status_code=202,response_model=DeveloperUploadResponse,tags=["Developer API v1"],summary="Upload an invoice",description="Required scope: `invoices:write`. Accepts one PDF, JPG, or PNG and queues the existing extraction pipeline.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:write"},413:{"description":"Upload exceeds 10 MB"},415:{"description":"Unsupported type or content mismatch"},429:{"description":"Per-key rate limit exceeded"}})
+async def developer_upload_invoice(background: BackgroundTasks,file: UploadFile=File(...),auth: dict=Depends(require_api_scope("invoices:write"))):
+    record=await store_invoice_upload(file,auth["user"]["id"])
+    enqueue_invoice_processing(background,record)
+    return DeveloperUploadResponse(id=record.id,status=record.status,message="Invoice accepted for processing",status_url=f"/api/v1/invoices/{record.id}")
+
+@app.get("/api/v1/invoices",response_model=DeveloperInvoicePage,tags=["Developer API v1"],summary="List invoices",description="Required scope: `invoices:read`. Results are scoped to the API key owner and ordered by creation time and ID descending.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:read"},422:{"description":"Invalid cursor or query parameter"},429:{"description":"Per-key rate limit exceeded"}})
+def developer_list_invoices(limit: int=Query(default=20,ge=1,le=100),cursor: Optional[str]=None,status: Optional[Status]=None,search: Optional[str]=Query(default=None,max_length=200),auth: dict=Depends(require_api_scope("invoices:read"))):
+    filters=[Record.user_id==auth["user"]["id"]]
+    if status is not None: filters.append(Record.status==status.value)
+    if search:
+        pattern="%"+search.strip()+"%"
+        filters.append((Record.filename.ilike(pattern))|(Record.invoice_json.ilike(pattern)))
+    if cursor:
+        created_at,record_id=decode_invoice_cursor(cursor)
+        filters.append((Record.created_at<created_at)|((Record.created_at==created_at)&(Record.id<record_id)))
+    with Session() as db:
+        records=db.scalars(select(Record).where(*filters).order_by(Record.created_at.desc(),Record.id.desc()).limit(limit+1)).all()
+    has_more=len(records)>limit
+    page=records[:limit]
+    return DeveloperInvoicePage(items=[api_invoice_summary(record) for record in page],next_cursor=encode_invoice_cursor(page[-1]) if has_more and page else None)
+
+@app.get("/api/v1/invoices/{invoice_id}",response_model=DeveloperInvoiceDetail,tags=["Developer API v1"],summary="Get invoice details",description="Required scope: `invoices:read`. Sensitive paths and raw model output are not included.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:read"},404:{"description":"Invoice not found"},429:{"description":"Per-key rate limit exceeded"}})
+def developer_get_invoice(invoice_id: str,auth: dict=Depends(require_api_scope("invoices:read"))):
+    with Session() as db:
+        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==auth["user"]["id"]))
+        if not record: raise HTTPException(404,"Invoice not found")
+        try: invoice=json.loads(record.invoice_json or "{}")
+        except ValueError: invoice={}
+        try: extraction=json.loads(record.extraction_json or "{}")
+        except ValueError: extraction={}
+        try: validation=json.loads(record.validation_json or "{}")
+        except ValueError: validation={}
+        links={"json":f"/api/v1/invoices/{record.id}/json"}
+        if "invoices:document:read" in auth["scopes"]: links["document"]=f"/api/v1/invoices/{record.id}/document"
+        failed=record.status=="FAILED"
+        return DeveloperInvoiceDetail(id=record.id,filename=record.filename,created_at=record.created_at,status=record.status,supplier_name=invoice.get("supplier_name"),invoice_number=invoice.get("invoice_number"),extraction={"status":extraction.get("status") or ("failed" if failed else record.status.casefold()),"model":extraction.get("model"),"duration_ms":extraction.get("duration_ms")},validation={"valid":validation.get("valid") if not failed else False,"errors":["Invoice extraction failed. Check backend logs or upload the document again."] if failed else validation.get("errors",[]),"warnings":[] if failed else validation.get("warnings",[])},approved=record.status=="APPROVED",review_status=record.status,links=links)
+
+@app.get("/api/v1/invoices/{invoice_id}/json",response_model=DeveloperInvoiceJson,tags=["Developer API v1"],summary="Get canonical invoice JSON",description="Required scope: `invoices:read`. Returns the latest saved invoice data as unapproved unless the invoice has been explicitly approved.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:read"},404:{"description":"Invoice not found"},409:{"description":"Extraction is still running or failed"},429:{"description":"Per-key rate limit exceeded"}})
+def developer_invoice_json(invoice_id: str,auth: dict=Depends(require_api_scope("invoices:read"))):
+    with Session() as db:
+        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==auth["user"]["id"]))
+        if not record: raise HTTPException(404,"Invoice not found")
+        if record.status in ("UPLOADED","PROCESSING"):
+            raise HTTPException(409,{"code":"processing","status":record.status,"message":"Invoice extraction is still in progress. Poll the status URL before requesting JSON."})
+        if record.status=="FAILED":
+            raise HTTPException(409,{"code":"extraction_failed","status":record.status,"message":"Invoice extraction failed. Check backend logs or upload the document again."})
+        try: invoice=Invoice.model_validate_json(record.invoice_json).model_dump(mode="json")
+        except Exception:
+            raise HTTPException(409,{"code":"invoice_data_unavailable","status":record.status,"message":"Canonical invoice data is not available yet."})
+        return DeveloperInvoiceJson(id=record.id,status=record.status,approved=record.status=="APPROVED",invoice=invoice)
+
+@app.get("/api/v1/invoices/{invoice_id}/document",tags=["Developer API v1"],summary="Download original invoice",description="Required scope: `invoices:document:read`. Returns the original uploaded file as an attachment.",responses={200:{"description":"Original PDF or image","content":{"application/pdf":{},"image/jpeg":{},"image/png":{}}},401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:document:read"},404:{"description":"Invoice or document not found"},429:{"description":"Per-key rate limit exceeded"}})
+def developer_invoice_document(invoice_id: str,auth: dict=Depends(require_api_scope("invoices:document:read"))):
+    with Session() as db:
+        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==auth["user"]["id"]))
+        if not record: raise HTTPException(404,"Invoice not found")
+        path=api_document_path(record)
+        mime=record.mime if record.mime in {"application/pdf","image/jpeg","image/png"} else "application/octet-stream"
+        return FileResponse(path,media_type=mime,filename=Path(record.filename).name,content_disposition_type="attachment")
 
 @app.patch("/api/invoices/{invoice_id}",dependencies=[Depends(csrf_protect)])
 def correct(invoice_id: str, payload: dict,user=Depends(current_user)):

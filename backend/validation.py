@@ -2,16 +2,21 @@
 from datetime import date
 from decimal import Decimal, InvalidOperation
 import os
+import re
 from typing import Optional
 from invoice_domain import Invoice
 
-SUPPORTED_CURRENCIES={"EUR","USD","GBP","CHF","CAD","AUD","NZD","SEK","NOK","DKK","JPY","CNY","PLN","CZK"}
-ZERO_DECIMAL_CURRENCIES={"JPY"}
+ZERO_DECIMAL_CURRENCIES={"BIF","CLP","DJF","GNF","ISK","JPY","KMF","KRW","PYG","RWF","UGX","UYI","VND","VUV","XAF","XOF","XPF"}
+THREE_DECIMAL_CURRENCIES={"BHD","IQD","JOD","KWD","LYD","OMR","TND"}
 IMPORTANT=("supplier_name","invoice_number","invoice_date","currency","invoice_total")
 
-def configured_tolerance() -> Decimal:
+def configured_tolerance(currency: Optional[str]=None) -> Decimal:
     try:
-        value=Decimal(os.getenv("INVOICE_ROUNDING_TOLERANCE","0.02"))
+        configured=os.getenv("INVOICE_ROUNDING_TOLERANCE")
+        if configured is None:
+            code=(currency or "").upper()
+            return Decimal("1") if code in ZERO_DECIMAL_CURRENCIES else Decimal("0.002") if code in THREE_DECIMAL_CURRENCIES else Decimal("0.02")
+        value=Decimal(configured)
         return value if value.is_finite() and value>=0 else Decimal("0.02")
     except (InvalidOperation,ValueError):
         return Decimal("0.02")
@@ -20,7 +25,7 @@ def currency_tolerance(currency: Optional[str], configured: Optional[Decimal]=No
     """Return a precision-aware tolerance; an explicit configured value takes precedence."""
     if configured is not None:return configured
     if currency and currency.upper() in ZERO_DECIMAL_CURRENCIES:return Decimal("1")
-    return configured_tolerance()
+    return configured_tolerance(currency)
 
 def validate(invoice: Invoice, all_invoices: list[Invoice], tolerance: Optional[Decimal]=None) -> dict:
     tolerance=currency_tolerance(invoice.currency,tolerance)
@@ -35,7 +40,7 @@ def validate(invoice: Invoice, all_invoices: list[Invoice], tolerance: Optional[
             try: dates[f]=date.fromisoformat(v)
             except (ValueError,TypeError): add("ERROR","invalid_date",f"{f.replace('_',' ').capitalize()} must use YYYY-MM-DD",f)
     if dates.get("invoice_date") and dates.get("due_date") and dates["due_date"]<dates["invoice_date"]: add("WARNING","due_before_invoice","Due date is earlier than invoice date","due_date")
-    if invoice.currency and invoice.currency.upper() not in SUPPORTED_CURRENCIES: add("WARNING","unsupported_currency",f"Currency code {invoice.currency!r} is not in the supported ISO currency set","currency")
+    if invoice.currency and not re.fullmatch(r"[A-Z]{3}",invoice.currency.upper()): add("WARNING","invalid_currency_code",f"Currency {invoice.currency!r} must be a three-letter ISO 4217 code","currency")
     vals=[invoice.subtotal,invoice.total_vat,invoice.invoice_total]
     for f,v in zip(("subtotal","total_vat","invoice_total"),vals):
         if v is not None and (not v.is_finite()): add("ERROR","non_finite_amount",f"{f.replace('_',' ').capitalize()} must be finite",f)

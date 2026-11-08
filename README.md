@@ -48,7 +48,7 @@ ollama pull qwen3-vl:8b
 ollama serve
 ```
 
-Configure the values in `.env.example` in the backend process environment. The default Ollama timeout is 600 seconds and automatic retries are disabled to avoid repeating long local inference calls; `OLLAMA_TIMEOUT` is bounded to 5–600 seconds and `OLLAMA_RETRIES` to 0–2. `INVOICE_ROUNDING_TOLERANCE` defaults to EUR-style 0.02 monetary units. The server does not automatically load `.env`; export the values or use your preferred environment loader, then restart the backend.
+Configure the values in `.env.example` in the backend process environment. The default Ollama timeout is 600 seconds and automatic retries are disabled to avoid repeating long local inference calls; `OLLAMA_TIMEOUT` is bounded to 5–600 seconds and `OLLAMA_RETRIES` to 0–2. Without `INVOICE_ROUNDING_TOLERANCE`, validation uses currency precision defaults: 0.02 for two-decimal currencies, 0.002 for three-decimal currencies, and 1 unit for zero-decimal currencies. Set the variable to override that tolerance. The server does not automatically load `.env`; export the values or use your preferred environment loader, then restart the backend.
 
 ## 🐍 Start the backend
 

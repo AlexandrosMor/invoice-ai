@@ -22,13 +22,16 @@ def test_invoice_facts_keep_amount_due_credit_sign_and_line_ids():
     assert validate(invoice,[])["valid"]
 
 
-def test_financial_validation_includes_discounts_shipping_and_currency_precision():
+def test_financial_validation_includes_discounts_shipping_and_currency_precision(monkeypatch):
+    monkeypatch.delenv("INVOICE_ROUNDING_TOLERANCE",raising=False)
     invoice=Invoice(currency="EUR",subtotal=Decimal("100"),discount_total=Decimal("10"),additional_charges=Decimal("5"),total_vat=Decimal("19"),invoice_total=Decimal("114"),line_items=[LineItem(quantity=2,unit_price=50,discount=10,line_total=90)])
     codes={item["code"] for item in validate(invoice,[])["issues"]}
     assert "document_total_mismatch" not in codes
     assert "line_calculation_mismatch" not in codes
     jpy=Invoice(supplier_name="Supplier",invoice_number="J-1",currency="JPY",subtotal=Decimal("100"),total_vat=Decimal("0"),invoice_total=Decimal("100.50"))
     assert validate(jpy,[])["valid"]
+    kwd=Invoice(supplier_name="Supplier",invoice_number="K-1",currency="KWD",subtotal=Decimal("100.000"),total_vat=Decimal("0"),invoice_total=Decimal("100.001"))
+    assert validate(kwd,[])["valid"] and validate(kwd,[])["rounding_tolerance"]=="0.002"
 
 
 def test_vat_treatments_are_not_collapsed_into_numeric_zero_rate():

@@ -8,6 +8,17 @@ Local-first invoice extraction and review PoC. It stores documents and invoice r
 - Node.js 20+
 - Ollama installed locally
 
+## Contributing and CI
+
+Make changes on a feature branch and open a pull request targeting `main`; avoid pushing changes directly to `main`. The GitHub Actions **CI** workflow runs on pull requests to `main` and on pushes to `main`. It runs the backend test suite and builds the frontend. Resolve CI failures before merging, and use the pull request template to summarize the change and its verification.
+
+The local equivalents are:
+
+```bash
+cd backend && pytest -q
+cd ../frontend && npm ci && npm run build
+```
+
 ## Start Ollama
 
 ```bash
@@ -74,7 +85,7 @@ cd backend
 pytest -q
 ```
 
-Tests do not call Ollama or download a model. The PDF fixture is synthetic and its ground truth is hand-authored for that synthetic content.
+Tests do not call Ollama or download a model. The PDF fixture is synthetic and its ground truth is hand-authored for that synthetic content. GitHub Actions runs this backend suite together with the frontend production build for pull requests to `main`.
 
 ## Extraction benchmarks
 

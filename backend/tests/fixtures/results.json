@@ -1,9 +1,9 @@
 {
-  "benchmark_version": "1.0.0",
+  "benchmark_version": "1.1.0",
   "dataset": "tests/fixtures",
   "model": "qwen3-vl:8b",
   "pipeline_version": "2.0.0",
-  "generated_at": "2026-11-07T20:58:01.837066+00:00",
+  "generated_at": "2026-11-08T07:10:27.629605+00:00",
   "total_invoices": 1,
   "successful_invoices": 1,
   "field_accuracy": {
@@ -21,8 +21,10 @@
   "overall_field_accuracy": 0.6,
   "whole_invoice_exact_match_rate": 0.0,
   "extraction_failure_rate": 0.0,
-  "average_processing_time_ms": 109931.93,
-  "p95_processing_time_ms": 109931.93,
+  "average_preprocessing_time_ms": 31.43,
+  "average_inference_time_ms": 137094.41,
+  "average_processing_time_ms": 137126.07,
+  "p95_processing_time_ms": 137126.07,
   "critical_false_accept_rate": 0.0,
   "validation_failure_rate": 0.0,
   "manual_review_rate": 1.0,
@@ -30,7 +32,9 @@
     {
       "id": "invoice_001",
       "status": "succeeded",
-      "duration_ms": 109931.93,
+      "duration_ms": 137126.07,
+      "preprocessing_duration_ms": 31.43,
+      "inference_duration_ms": 137094.41,
       "expected": {
         "supplier_name": "Northwind Office Supplies B.V.",
         "invoice_number": "NW-2026-001",
@@ -71,8 +75,8 @@
       },
       "extracted": {
         "supplier_name": "Northwind Office Supplies B.V.",
-        "supplier_address": "Prinsengracht 100, 1015 EA Amsterdam",
-        "supplier_vat_number": "NL123456789B01",
+        "supplier_address": null,
+        "supplier_vat_number": null,
         "supplier_kvk_number": null,
         "supplier_iban": null,
         "invoice_number": "NW-2026-001",
@@ -89,16 +93,16 @@
           {
             "description": "Paper (A4)",
             "quantity": "2",
-            "unit_price": "10.0",
+            "unit_price": "10.00",
             "vat_rate": "21",
-            "line_total": "20.0"
+            "line_total": "20.00"
           },
           {
             "description": "Pens (blue)",
             "quantity": "1",
-            "unit_price": "5.0",
+            "unit_price": "5.00",
             "vat_rate": "9",
-            "line_total": "5.0"
+            "line_total": "5.00"
           }
         ]
       },

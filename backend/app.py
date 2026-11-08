@@ -201,9 +201,12 @@ def process_invoice(invoice_id: str,user_id: Optional[str]=None):
         if not r: return
         started=time.monotonic()
         try:
+            preprocess_started=time.monotonic()
             document=DocumentProcessor.process(Path(r.path),r.mime)
+            preprocessing_duration=round((time.monotonic()-preprocess_started)*1000,2)
             extractor=InvoiceExtractor()
             result=extractor.extract(document)
+            result["preprocessing_duration_ms"]=preprocessing_duration
             result["total_processing_duration_ms"]=round((time.monotonic()-started)*1000,2)
             result["model_config"]={"temperature":0,"seed":42,"timeout_seconds":extractor.timeout,"max_retries":extractor.retries}
             invoice=result["invoice"]

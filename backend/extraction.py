@@ -34,8 +34,8 @@ class InvoiceExtractor:
     def __init__(self):
         self.url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
         self.model=os.getenv("OLLAMA_MODEL","qwen3-vl:8b")
-        self.timeout=max(5.0,min(float(os.getenv("OLLAMA_TIMEOUT","240")),600.0))
-        self.retries=max(0,min(int(os.getenv("OLLAMA_RETRIES","1")),2))
+        self.timeout=max(5.0,min(float(os.getenv("OLLAMA_TIMEOUT","600")),600.0))
+        self.retries=max(0,min(int(os.getenv("OLLAMA_RETRIES","0")),2))
 
     def extract(self, document: ProcessedDocument) -> dict:
         started=time.monotonic(); schema=Invoice.model_json_schema()

@@ -48,7 +48,7 @@ def field_equal(field,expected,actual,tolerance=Decimal("0.01")):
 
 def evaluate_dataset(dataset:Path, output:Path|None=None, extractor=None):
     invoice_dir=dataset/"invoices"; truth_dir=dataset/"ground_truth"
-    truth_files=sorted(truth_dir.glob("*.json")); results=[]; durations=[]; field_hits={f:0 for f in FIELDS}; field_counts={f:0 for f in FIELDS}
+    truth_files=sorted(truth_dir.glob("*.json")); results=[]; durations=[]; preprocessing_durations=[]; inference_durations=[]; field_hits={f:0 for f in FIELDS}; field_counts={f:0 for f in FIELDS}
     extraction_failures=0; manual_reviews=0; validation_failures=0; successful=0; false_accept=0; false_accept_denominator=0; extractor=extractor or InvoiceExtractor()
     for truth_file in truth_files:
         invoice_id=truth_file.stem; ground=json.loads(truth_file.read_text()); doc_path=next((invoice_dir/f"{invoice_id}{ext}" for ext in (".pdf",".png",".jpg",".jpeg") if (invoice_dir/f"{invoice_id}{ext}").exists()),None)
@@ -57,8 +57,10 @@ def evaluate_dataset(dataset:Path, output:Path|None=None, extractor=None):
         t=time.perf_counter()
         try:
             document=DocumentProcessor.process(doc_path,"application/pdf" if doc_path.suffix==".pdf" else "image/jpeg" if doc_path.suffix in (".jpg",".jpeg") else "image/png")
+            preprocessing_ms=round((time.perf_counter()-t)*1000,2)
             extracted=extractor.extract(document); invoice=extracted["invoice"].model_dump(mode="json"); elapsed=round((time.perf_counter()-t)*1000,2)
-            successful+=1; durations.append(float(elapsed)); validation=validate(Invoice.model_validate(invoice),[])
+            inference_ms=extracted.get("duration_ms",round(elapsed-preprocessing_ms,2))
+            successful+=1; durations.append(float(elapsed)); preprocessing_durations.append(float(preprocessing_ms)); inference_durations.append(float(inference_ms)); validation=validate(Invoice.model_validate(invoice),[])
             incorrect=[]
             for field in FIELDS:
                 if field not in ground: continue
@@ -73,12 +75,12 @@ def evaluate_dataset(dataset:Path, output:Path|None=None, extractor=None):
             missing_evidence=any(invoice.get(f) is not None and evidence.get(f,{}).get("needs_review",True) for f in ("supplier_name","invoice_number","invoice_date","currency","invoice_total"))
             if validation["review_assessment"]!="READY_FOR_REVIEW" or missing_evidence:manual_reviews+=1
             if not validation["valid"]:validation_failures+=1
-            results.append({"id":invoice_id,"status":"succeeded","duration_ms":elapsed,"expected":ground,"extracted":invoice,"incorrect_fields":incorrect,"validation":validation,"model":extracted["model"],"pipeline_version":extracted["pipeline_version"]})
+            results.append({"id":invoice_id,"status":"succeeded","duration_ms":elapsed,"preprocessing_duration_ms":preprocessing_ms,"inference_duration_ms":inference_ms,"expected":ground,"extracted":invoice,"incorrect_fields":incorrect,"validation":validation,"model":extracted["model"],"pipeline_version":extracted["pipeline_version"]})
         except Exception as e:
             extraction_failures+=1; results.append({"id":invoice_id,"status":"failed","error":str(e)})
     total=len(truth_files); all_fields=sum(field_counts.values()); exact=sum(field_hits.values())
     sorted_times=sorted(durations); p95=sorted_times[max(0,int(.95*len(sorted_times)+.999999)-1)] if sorted_times else None
-    report={"benchmark_version":"1.0.0","dataset":str(dataset),"model":getattr(extractor,"model","unknown"),"pipeline_version":PIPELINE_VERSION,"generated_at":datetime.now(timezone.utc).isoformat(),"total_invoices":total,"successful_invoices":successful,"field_accuracy":{f:(field_hits[f]/field_counts[f] if field_counts[f] else None) for f in FIELDS},"overall_field_accuracy":exact/all_fields if all_fields else None,"whole_invoice_exact_match_rate":sum(1 for x in results if x.get("status")=="succeeded" and not x.get("incorrect_fields"))/total if total else None,"extraction_failure_rate":extraction_failures/total if total else None,"average_processing_time_ms":statistics.mean(durations) if durations else None,"p95_processing_time_ms":p95,"critical_false_accept_rate":false_accept/false_accept_denominator if false_accept_denominator else None,"validation_failure_rate":validation_failures/successful if successful else None,"manual_review_rate":manual_reviews/successful if successful else None,"invoices":results}
+    report={"benchmark_version":"1.1.0","dataset":str(dataset),"model":getattr(extractor,"model","unknown"),"pipeline_version":PIPELINE_VERSION,"generated_at":datetime.now(timezone.utc).isoformat(),"total_invoices":total,"successful_invoices":successful,"field_accuracy":{f:(field_hits[f]/field_counts[f] if field_counts[f] else None) for f in FIELDS},"overall_field_accuracy":exact/all_fields if all_fields else None,"whole_invoice_exact_match_rate":sum(1 for x in results if x.get("status")=="succeeded" and not x.get("incorrect_fields"))/total if total else None,"extraction_failure_rate":extraction_failures/total if total else None,"average_preprocessing_time_ms":statistics.mean(preprocessing_durations) if preprocessing_durations else None,"average_inference_time_ms":statistics.mean(inference_durations) if inference_durations else None,"average_processing_time_ms":statistics.mean(durations) if durations else None,"p95_processing_time_ms":p95,"critical_false_accept_rate":false_accept/false_accept_denominator if false_accept_denominator else None,"validation_failure_rate":validation_failures/successful if successful else None,"manual_review_rate":manual_reviews/successful if successful else None,"invoices":results}
     if output:
         output.parent.mkdir(parents=True,exist_ok=True); output.write_text(json.dumps(report,indent=2,ensure_ascii=False))
     return report

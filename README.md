@@ -1,14 +1,28 @@
-# InvoiceAI
+# 🧾 InvoiceAI
 
-Local-first invoice extraction and review PoC. It stores documents and invoice records locally, combines PDF text with page images for a local Ollama vision model, records evidence and extraction audit metadata, and only permits export and mock accounting synchronization after explicit human approval.
+![CI](https://github.com/AlexandrosMor/invoice-ai/actions/workflows/ci.yml/badge.svg?branch=main)
 
-## Requirements
+**Local-first invoice processing, with a human in control.** InvoiceAI uses a local Ollama vision model to extract invoice data, then helps you review, validate, and prepare it for export. Documents and records stay in local storage, and approval is always explicit.
+
+## ✨ What’s included
+
+- 🧠 **Local AI extraction** with Qwen3-VL through Ollama; no paid AI API required.
+- 📄 **PDF and image uploads** with multi-page PDF preview and extraction status updates.
+- 🔐 **Accounts and private workspaces** with user-scoped invoices, secure sessions, and profile management.
+- 🧾 **Structured invoice review** for supplier details, VAT rows, line items, and totals, plus an Advanced JSON view.
+- ✅ **Deterministic validation and human approval** before export or synchronization.
+- 📦 **Canonical JSON export** and a clearly labeled mock Moneybird workflow.
+- ⏱️ **Processing timing details** and benchmark tools to measure local extraction runs.
+
+> InvoiceAI is an actively evolving local PoC. Real accounting connectors and production deployment infrastructure are not implemented yet.
+
+## ⚙️ Requirements
 
 - Python 3.12+
 - Node.js 20+
 - Ollama installed locally
 
-## Contributing and CI
+## 🤝 Contributing and CI
 
 Make changes on a feature branch and open a pull request targeting `main`; avoid pushing changes directly to `main`. The GitHub Actions **CI** workflow runs on pull requests to `main` and on pushes to `main`. It runs the backend test suite and builds the frontend. Resolve CI failures before merging, and use the pull request template to summarize the change and its verification.
 
@@ -19,7 +33,7 @@ cd backend && pytest -q
 cd ../frontend && npm ci && npm run build
 ```
 
-## Start Ollama
+## 🧠 Start Ollama
 
 ```bash
 ollama pull qwen3-vl:8b
@@ -28,7 +42,7 @@ ollama serve
 
 Configure the values in `.env.example` in the backend process environment. The default Ollama timeout is 600 seconds and automatic retries are disabled to avoid repeating long local inference calls; `OLLAMA_TIMEOUT` is bounded to 5–600 seconds and `OLLAMA_RETRIES` to 0–2. `INVOICE_ROUNDING_TOLERANCE` defaults to EUR-style 0.02 monetary units. The server does not automatically load `.env`; export the values or use your preferred environment loader, then restart the backend.
 
-## Start the backend
+## 🐍 Start the backend
 
 ```bash
 cd backend
@@ -42,7 +56,7 @@ The backend startup script sets a 600-second Ollama timeout and disables automat
 
 The API docs are at http://localhost:8000/docs. SQLite and uploaded documents are created in `backend/data`. Registration is open in this local PoC; there is no email verification, password reset, account administration, or production-grade distributed rate limiter yet.
 
-## Start the frontend
+## ⚛️ Start the frontend
 
 In a second terminal:
 
@@ -54,7 +68,7 @@ npm run dev
 
 Open http://localhost:5173. Vite forwards `/api` calls to the backend.
 
-## Workflow
+## 🔄 Invoice workflow
 
 1. Create an account or sign in. Email syntax is checked, but email ownership is not verified in this PoC.
 2. Upload a PDF, JPG, or PNG (up to 10 MB). Extraction runs in a FastAPI background task.
@@ -64,7 +78,7 @@ Open http://localhost:5173. Vite forwards `/api` calls to the backend.
 
 Invoices are scoped to the signed-in account. The browser uses an HttpOnly session cookie, a readable CSRF token cookie/header pair, and same-site cookie settings. Sessions expire after 14 days. Passwords are hashed with Argon2id; authentication attempts are rate-limited in process memory. Set `COOKIE_SECURE=true` behind HTTPS. For a different frontend origin, set `FRONTEND_ORIGIN` for the backend.
 
-### Existing SQLite data
+### 🗃️ Existing SQLite data
 
 On startup, the app adds the ownership column without deleting existing invoices. Existing rows remain unassigned and are invisible to user accounts until an administrator explicitly assigns them. Create the destination account through the registration page, then review the dry-run list and assign only if appropriate:
 
@@ -80,7 +94,7 @@ The editor accepts the canonical invoice JSON. The schema and null behavior are 
 
 The invoice API preserves its existing canonical `invoice` property and adds an `extraction` metadata property for provenance/evidence and correction history. Validation responses preserve `valid`, `errors`, and `warnings`, and add severity-coded `issues` plus a `review_assessment`. New read endpoints are `GET /api/invoices/{id}/audit` and `GET /api/benchmarks/latest`. Existing status and approval endpoints are unchanged.
 
-## Tests
+## 🧪 Tests
 
 ```bash
 cd backend
@@ -89,7 +103,7 @@ pytest -q
 
 Tests do not call Ollama or download a model. The PDF fixture is synthetic and its ground truth is hand-authored for that synthetic content. GitHub Actions runs this backend suite together with the frontend production build for pull requests to `main`.
 
-## Extraction benchmarks
+## 📊 Extraction benchmarks
 
 Run a real model benchmark with Ollama running and the configured vision model available:
 
@@ -114,11 +128,11 @@ Metric definitions:
 - Validation-failure and manual-review rates use successful extractions as the denominator. Review includes validation warnings/errors or missing source evidence.
 - Null accuracy is shown as unavailable when no ground-truth row scores a field; there is no production metric until a benchmark has been run.
 
-## Architecture
+## 🏗️ Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for processing, validation, persistence, and accounting boundaries.
 
-### Future Production Architecture (Planned)
+### 🗺️ Future production architecture (planned)
 
 The following is a target direction, not the architecture currently implemented. InvoiceAI will evolve incrementally from its local SQLite and Ollama PoC. Production components may change as scalability, security, and operational requirements become clearer.
 
@@ -148,7 +162,7 @@ flowchart TD
 
 The current PoC uses SQLite, local document storage, FastAPI background tasks, local Ollama/Qwen3-VL inference, and a basic account/session layer with per-user invoice ownership. It does not implement PostgreSQL, private object storage, durable queues, or integration workers. InvoiceAI will move incrementally toward the planned architecture; components may change as scalability, security, and operational requirements become clearer.
 
-## Current PoC limits
+## ℹ️ Current PoC limits
 
 - The mock Moneybird adapter does not make live API calls. Live synchronization must wait for verified official API documentation and credentials.
 - The UI provides structured invoice fields and an advanced JSON view for flexible correction.

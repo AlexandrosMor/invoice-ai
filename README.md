@@ -35,8 +35,10 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app:app --reload --port 8000
+./start.sh
 ```
+
+The backend startup script sets a 600-second Ollama timeout and disables automatic retries by default. Override either value in the environment when needed, for example `OLLAMA_TIMEOUT=300 ./start.sh`. Set `PORT` to change the backend port.
 
 The API docs are at http://localhost:8000/docs. SQLite and uploaded documents are created in `backend/data`. Registration is open in this local PoC; there is no email verification, password reset, account administration, or production-grade distributed rate limiter yet.
 

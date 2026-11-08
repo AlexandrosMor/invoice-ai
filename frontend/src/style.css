@@ -13,3 +13,34 @@
 .ollamaStatusCopy b,.ollamaStatusCopy small{display:block}
 .ollamaStatusCopy b{font-size:11px;margin-bottom:4px}
 .ollamaStatusCopy small{font-size:10px;line-height:1.45;color:inherit;opacity:.88}
+
+.apiKeysCard{grid-column:1/-1;min-width:0}
+.apiKeysCard .cardhead h2{display:flex;align-items:center;gap:8px}
+.apiKeyForm{display:grid;grid-template-columns:minmax(0,1fr) minmax(180px,.45fr);align-items:end;gap:14px;padding:5px 22px 18px}
+.apiKeyForm>fieldset{grid-column:1/-1;border:1px solid #e7eeea;border-radius:8px;padding:12px 14px}
+.apiKeyForm legend{padding:0 5px;color:#53645d;font-size:11px;font-weight:700}
+.apiKeyForm .scopeOption{display:flex;align-items:flex-start;gap:9px;margin:9px 0;color:#53645d;font-size:11px}
+.apiKeyForm .scopeOption input{width:15px;height:15px;margin:1px 0 0;accent-color:#21845f}
+.scopeOption b,.scopeOption small{display:block}
+.scopeOption b{font:600 11px ui-monospace,monospace;color:#344a40}
+.scopeOption small{font-size:10px;margin-top:3px}
+.apiKeyForm>button{justify-self:start;min-height:38px}
+.apiKeySecret{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;margin:0 22px 16px;padding:14px;border:1px solid #c9e8d5;border-radius:9px;background:#f2faf4;color:#315d43}
+.apiKeySecret>div{grid-column:1/-1}
+.apiKeySecret b,.apiKeySecret small{display:block}
+.apiKeySecret small{margin-top:4px;font-size:10px;color:#637d6b}
+.apiKeySecret code{overflow-wrap:anywhere;color:#244a35;font-size:11px}
+.apiKeyListHead{display:flex;align-items:center;justify-content:space-between;margin:4px 22px 9px;padding-top:14px;border-top:1px solid #edf1ef}
+.apiKeyListHead h3{margin:0;color:#354a40;font-size:12px}
+.apiKeyEmpty{margin:0 22px 18px;color:#89958f;font-size:11px}
+.apiKeyTableWrap{margin:0 22px 18px;overflow-x:auto}
+.apiKeyTable{width:100%;border-collapse:collapse;white-space:nowrap;font-size:10px}
+.apiKeyTable th,.apiKeyTable td{padding:10px 9px;border-bottom:1px solid #edf1ef;text-align:left;vertical-align:top}
+.apiKeyTable th{color:#87948e;font-size:9px;text-transform:uppercase;letter-spacing:.04em}
+.apiKeyTable td{color:#53645d}
+.apiKeyTable code{font-size:10px;color:#53645d}
+.apiKeyTable .revoked td{opacity:.6}
+.revokedLabel{display:block;color:#ad5d56;font-size:9px;margin-top:3px}
+.revokeKey{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:#ac4f4a;font-size:10px;cursor:pointer}
+.revokeKey:disabled{opacity:.5;cursor:wait}
+@media(max-width:700px){.apiKeysCard{grid-column:auto}.apiKeyForm{grid-template-columns:1fr;padding-left:14px;padding-right:14px}.apiKeyForm>fieldset{grid-column:auto}.apiKeySecret,.apiKeyListHead,.apiKeyTableWrap{margin-left:14px;margin-right:14px}.apiKeySecret{grid-template-columns:1fr}.apiKeySecret>div{grid-column:auto}.apiKeyTableWrap{overflow-x:auto}}

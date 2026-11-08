@@ -34,7 +34,7 @@
 
 ## 🤝 Contributing and CI
 
-Make changes on a feature branch and open a pull request targeting `main`; avoid pushing changes directly to `main`. The GitHub Actions **CI** workflow runs on pull requests to `main` and on pushes to `main`. It runs the backend test suite and builds the frontend. Resolve CI failures before merging, and use the pull request template to summarize the change and its verification.
+Make changes on a feature branch and open a pull request targeting `main`; avoid pushing changes directly to `main`. The GitHub Actions **CI** workflow runs on every branch push and on pull requests targeting `main`. It runs the backend test suite and builds the frontend. Resolve CI failures before merging, and use the pull request template to summarize the change and its verification.
 
 The local equivalents are:
 

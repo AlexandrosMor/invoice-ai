@@ -1,0 +1,38 @@
+{
+  "supplier_name": "De Bloemenwinkel",
+  "supplier_vat_number": "NL987654321B01",
+  "supplier_address": "Examplelaan 12, Amsterdam",
+  "customer_name": "Example Studio",
+  "customer_address": "Teststraat 2, Utrecht",
+  "customer_country": "Netherlands",
+  "invoice_number": "NL-9002",
+  "invoice_date": "2026-08-02",
+  "due_date": "2026-09-01",
+  "currency": "EUR",
+  "document_type": "invoice",
+  "subtotal": "50.00",
+  "discount_total": null,
+  "additional_charges": null,
+  "total_vat": "4.50",
+  "invoice_total": "54.50",
+  "amount_due": "54.50",
+  "vat_breakdown": [
+    {
+      "rate": "9",
+      "taxable_amount": "50.00",
+      "tax_amount": "4.50"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Books and printed materials",
+      "quantity": "5",
+      "unit_price": "10.00",
+      "vat_rate": "9",
+      "line_total": "50.00"
+    }
+  ],
+  "sequence": 1,
+  "duplicate_expected": "NO_DUPLICATE",
+  "duplicate_reference": null
+}

@@ -1,0 +1,40 @@
+{
+  "supplier_name": "EU Cloud Services GmbH",
+  "supplier_vat_number": "DE123456789",
+  "supplier_address": "Examplelaan 12, Amsterdam",
+  "customer_name": "Example Studio",
+  "customer_address": "Teststraat 2, Utrecht",
+  "customer_country": "Netherlands",
+  "invoice_number": "DE-26005",
+  "invoice_date": "2026-08-05",
+  "due_date": null,
+  "currency": "EUR",
+  "document_type": "invoice",
+  "subtotal": "200.00",
+  "discount_total": null,
+  "additional_charges": null,
+  "total_vat": "0.00",
+  "invoice_total": "200.00",
+  "amount_due": "200.00",
+  "vat_breakdown": [
+    {
+      "rate": "0",
+      "taxable_amount": "200.00",
+      "tax_amount": "0.00",
+      "treatment": "reverse_charge"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Cloud services",
+      "quantity": "1",
+      "unit_price": "200.00",
+      "vat_rate": "0",
+      "line_total": "200.00",
+      "vat_treatment": "reverse_charge"
+    }
+  ],
+  "sequence": 4,
+  "duplicate_expected": "NO_DUPLICATE",
+  "duplicate_reference": null
+}

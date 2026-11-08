@@ -1,0 +1,50 @@
+{
+  "supplier_name": "Northwind Office Supplies B.V.",
+  "supplier_vat_number": "NL123456789B01",
+  "supplier_address": "Examplelaan 12, Amsterdam",
+  "customer_name": "Example Studio",
+  "customer_address": "Teststraat 2, Utrecht",
+  "customer_country": "Netherlands",
+  "invoice_number": "NW-26003",
+  "invoice_date": "2026-08-03",
+  "due_date": null,
+  "currency": "EUR",
+  "document_type": "invoice",
+  "subtotal": "125.00",
+  "discount_total": null,
+  "additional_charges": null,
+  "total_vat": "23.25",
+  "invoice_total": "148.25",
+  "amount_due": "148.25",
+  "vat_breakdown": [
+    {
+      "rate": "9",
+      "taxable_amount": "25.00",
+      "tax_amount": "2.25"
+    },
+    {
+      "rate": "21",
+      "taxable_amount": "100.00",
+      "tax_amount": "21.00"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Books",
+      "quantity": "5",
+      "unit_price": "5.00",
+      "vat_rate": "9",
+      "line_total": "25.00"
+    },
+    {
+      "description": "Office supplies",
+      "quantity": "2",
+      "unit_price": "50.00",
+      "vat_rate": "21",
+      "line_total": "100.00"
+    }
+  ],
+  "sequence": 2,
+  "duplicate_expected": "NO_DUPLICATE",
+  "duplicate_reference": null
+}

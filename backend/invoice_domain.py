@@ -1,5 +1,6 @@
 """Canonical invoice data and extraction metadata models."""
 from decimal import Decimal
+from uuid import uuid4
 from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -7,13 +8,20 @@ class TaxBreakdown(BaseModel):
     rate: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
     taxable_amount: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
     tax_amount: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
+    treatment: Optional[str] = None
+    source: Optional[str] = None
 
 class LineItem(BaseModel):
+    line_id: str = Field(default_factory=lambda: str(uuid4()))
     description: Optional[str] = None
     quantity: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
     unit_price: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
     vat_rate: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
     line_total: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
+    gross_total: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
+    discount: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
+    price_includes_vat: Optional[bool] = None
+    vat_treatment: Optional[str] = None
 
 class Invoice(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -22,16 +30,27 @@ class Invoice(BaseModel):
     supplier_vat_number: Optional[str] = None
     supplier_kvk_number: Optional[str] = None
     supplier_iban: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_vat_number: Optional[str] = None
+    supplier_country: Optional[str] = None
+    customer_country: Optional[str] = None
     invoice_number: Optional[str] = None
     invoice_date: Optional[str] = None
     due_date: Optional[str] = None
+    delivery_date: Optional[str] = None
+    payment_date: Optional[str] = None
     currency: Optional[str] = None
     purchase_order_reference: Optional[str] = None
     document_type: Optional[str] = Field(default=None, description="invoice or credit_note when stated")
     subtotal: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
+    discount_total: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
+    additional_charges: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
     vat_breakdown: list[TaxBreakdown] = Field(default_factory=list)
     total_vat: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
     invoice_total: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
+    amount_paid: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
+    amount_due: Optional[Decimal] = Field(default=None, allow_inf_nan=False)
     line_items: list[LineItem] = Field(default_factory=list)
 
 class FieldEvidence(BaseModel):

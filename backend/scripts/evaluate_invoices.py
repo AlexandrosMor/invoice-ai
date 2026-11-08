@@ -1,6 +1,7 @@
 """Evaluate local Ollama invoice extraction against manually verified JSON."""
 from __future__ import annotations
 import argparse, json, statistics, sys, time
+import hashlib
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
@@ -9,9 +10,10 @@ from document_processing import DocumentProcessor
 from extraction import InvoiceExtractor, PIPELINE_VERSION
 from invoice_domain import Invoice
 from validation import validate
+from duplicate_detection import classify_duplicate
 
-FIELDS=("invoice_number","supplier_name","invoice_date","due_date","currency","subtotal","total_vat","invoice_total","vat_breakdown","line_items")
-NUMERIC_FIELDS={"subtotal","total_vat","invoice_total"}
+FIELDS=("supplier_name","supplier_address","supplier_vat_number","supplier_kvk_number","supplier_iban","customer_name","customer_address","customer_vat_number","invoice_number","invoice_date","due_date","delivery_date","payment_date","purchase_order_reference","currency","document_type","subtotal","discount_total","additional_charges","total_vat","invoice_total","amount_paid","amount_due","vat_breakdown","line_items")
+NUMERIC_FIELDS={"subtotal","discount_total","additional_charges","total_vat","invoice_total","amount_paid","amount_due"}
 def norm(v):
     if isinstance(v,dict): return {k:norm(x) for k,x in sorted(v.items())}
     if isinstance(v,list): return [norm(x) for x in v]
@@ -33,23 +35,28 @@ def field_equal(field,expected,actual,tolerance=Decimal("0.01")):
                 if key=="rate":
                     if not close_numeric(xv,yv,tolerance):return False
                 elif not close_numeric(xv,yv,tolerance):return False
+            if "treatment" in x and norm(x.get("treatment"))!=norm(y.get("treatment")):return False
         return True
     if field=="line_items":
         e=expected or []; a=actual or []
         if len(e)!=len(a):return False
         for x,y in zip(e,a):
-            for key in ("description","quantity","unit_price","vat_rate","line_total"):
+            for key in ("description","quantity","unit_price","vat_rate","line_total","gross_total","discount"):
                 xv,yv=x.get(key),y.get(key)
                 if key in ("quantity","unit_price","vat_rate","line_total"):
                     if not close_numeric(xv,yv,tolerance):return False
                 elif norm(xv)!=norm(yv):return False
+            for key in ("vat_treatment","price_includes_vat"):
+                if key in x and norm(x.get(key))!=norm(y.get(key)):return False
         return True
     return norm(expected)==norm(actual)
 
 def evaluate_dataset(dataset:Path, output:Path|None=None, extractor=None):
     invoice_dir=dataset/"invoices"; truth_dir=dataset/"ground_truth"
-    truth_files=sorted(truth_dir.glob("*.json")); results=[]; durations=[]; preprocessing_durations=[]; inference_durations=[]; field_hits={f:0 for f in FIELDS}; field_counts={f:0 for f in FIELDS}
-    extraction_failures=0; manual_reviews=0; validation_failures=0; successful=0; false_accept=0; false_accept_denominator=0; extractor=extractor or InvoiceExtractor()
+    truth_files=list(truth_dir.glob("*.json"))
+    truth_files.sort(key=lambda path:(json.loads(path.read_text()).get("sequence",10**9),path.name))
+    results=[];durations=[];preprocessing_durations=[];inference_durations=[];field_hits={f:0 for f in FIELDS};field_counts={f:0 for f in FIELDS}
+    extraction_failures=0;manual_reviews=0;validation_failures=0;successful=0;false_accept=0;false_accept_denominator=0;extractor=extractor or InvoiceExtractor();prior_duplicate_candidates=[];duplicate_cases=[]
     for truth_file in truth_files:
         invoice_id=truth_file.stem; ground=json.loads(truth_file.read_text()); doc_path=next((invoice_dir/f"{invoice_id}{ext}" for ext in (".pdf",".png",".jpg",".jpeg") if (invoice_dir/f"{invoice_id}{ext}").exists()),None)
         if doc_path is None:
@@ -75,12 +82,20 @@ def evaluate_dataset(dataset:Path, output:Path|None=None, extractor=None):
             missing_evidence=any(invoice.get(f) is not None and evidence.get(f,{}).get("needs_review",True) for f in ("supplier_name","invoice_number","invoice_date","currency","invoice_total"))
             if validation["review_assessment"]!="READY_FOR_REVIEW" or missing_evidence:manual_reviews+=1
             if not validation["valid"]:validation_failures+=1
-            results.append({"id":invoice_id,"status":"succeeded","duration_ms":elapsed,"preprocessing_duration_ms":preprocessing_ms,"inference_duration_ms":inference_ms,"expected":ground,"extracted":invoice,"incorrect_fields":incorrect,"validation":validation,"model":extracted["model"],"pipeline_version":extracted["pipeline_version"]})
+            hash_value=hashlib.sha256(doc_path.read_bytes()).hexdigest()
+            duplicate=classify_duplicate(invoice,hash_value,prior_duplicate_candidates)
+            if ground.get("duplicate_expected"):
+                duplicate_cases.append({"expected":ground["duplicate_expected"],"predicted":duplicate["classification"]})
+            results.append({"id":invoice_id,"status":"succeeded","duration_ms":elapsed,"preprocessing_duration_ms":preprocessing_ms,"inference_duration_ms":inference_ms,"expected":ground,"extracted":invoice,"incorrect_fields":incorrect,"validation":validation,"duplicate_detection":duplicate,"model":extracted["model"],"pipeline_version":extracted["pipeline_version"]})
+            prior_duplicate_candidates.append({"id":invoice_id,"invoice":invoice,"file_hash":hash_value})
         except Exception as e:
-            extraction_failures+=1; results.append({"id":invoice_id,"status":"failed","error":str(e)})
+            extraction_failures+=1;hash_value=hashlib.sha256(doc_path.read_bytes()).hexdigest();duplicate=classify_duplicate({},hash_value,prior_duplicate_candidates)
+            if ground.get("duplicate_expected"):duplicate_cases.append({"expected":ground["duplicate_expected"],"predicted":duplicate["classification"]})
+            results.append({"id":invoice_id,"status":"failed","error":str(e),"duplicate_detection":duplicate});prior_duplicate_candidates.append({"id":invoice_id,"invoice":{},"file_hash":hash_value})
     total=len(truth_files); all_fields=sum(field_counts.values()); exact=sum(field_hits.values())
     sorted_times=sorted(durations); p95=sorted_times[max(0,int(.95*len(sorted_times)+.999999)-1)] if sorted_times else None
-    report={"benchmark_version":"1.1.0","dataset":str(dataset),"model":getattr(extractor,"model","unknown"),"pipeline_version":PIPELINE_VERSION,"generated_at":datetime.now(timezone.utc).isoformat(),"total_invoices":total,"successful_invoices":successful,"field_accuracy":{f:(field_hits[f]/field_counts[f] if field_counts[f] else None) for f in FIELDS},"overall_field_accuracy":exact/all_fields if all_fields else None,"whole_invoice_exact_match_rate":sum(1 for x in results if x.get("status")=="succeeded" and not x.get("incorrect_fields"))/total if total else None,"extraction_failure_rate":extraction_failures/total if total else None,"average_preprocessing_time_ms":statistics.mean(preprocessing_durations) if preprocessing_durations else None,"average_inference_time_ms":statistics.mean(inference_durations) if inference_durations else None,"average_processing_time_ms":statistics.mean(durations) if durations else None,"p95_processing_time_ms":p95,"critical_false_accept_rate":false_accept/false_accept_denominator if false_accept_denominator else None,"validation_failure_rate":validation_failures/successful if successful else None,"manual_review_rate":manual_reviews/successful if successful else None,"invoices":results}
+    duplicate_tp=sum(c["expected"]!="NO_DUPLICATE" and c["predicted"]!="NO_DUPLICATE" for c in duplicate_cases);duplicate_fp=sum(c["expected"]=="NO_DUPLICATE" and c["predicted"]!="NO_DUPLICATE" for c in duplicate_cases);duplicate_fn=sum(c["expected"]!="NO_DUPLICATE" and c["predicted"]=="NO_DUPLICATE" for c in duplicate_cases)
+    report={"benchmark_version":"1.2.0","dataset":str(dataset),"model":getattr(extractor,"model","unknown"),"pipeline_version":PIPELINE_VERSION,"generated_at":datetime.now(timezone.utc).isoformat(),"total_invoices":total,"successful_invoices":successful,"field_accuracy":{f:(field_hits[f]/field_counts[f] if field_counts[f] else None) for f in FIELDS},"supplier_accuracy":field_hits["supplier_name"]/field_counts["supplier_name"] if field_counts["supplier_name"] else None,"invoice_number_accuracy":field_hits["invoice_number"]/field_counts["invoice_number"] if field_counts["invoice_number"] else None,"date_accuracy":{f:(field_hits[f]/field_counts[f] if field_counts[f] else None) for f in ("invoice_date","due_date","delivery_date","payment_date")},"financial_total_accuracy":{f:(field_hits[f]/field_counts[f] if field_counts[f] else None) for f in ("subtotal","total_vat","invoice_total","amount_due")},"vat_breakdown_accuracy":field_hits["vat_breakdown"]/field_counts["vat_breakdown"] if field_counts["vat_breakdown"] else None,"line_item_accuracy":field_hits["line_items"]/field_counts["line_items"] if field_counts["line_items"] else None,"overall_field_accuracy":exact/all_fields if all_fields else None,"whole_invoice_exact_match_rate":sum(1 for x in results if x.get("status")=="succeeded" and not x.get("incorrect_fields"))/total if total else None,"extraction_failure_rate":extraction_failures/total if total else None,"average_preprocessing_time_ms":statistics.mean(preprocessing_durations) if preprocessing_durations else None,"average_inference_time_ms":statistics.mean(inference_durations) if inference_durations else None,"average_processing_time_ms":statistics.mean(durations) if durations else None,"p95_processing_time_ms":p95,"critical_false_accept_rate":false_accept/false_accept_denominator if false_accept_denominator else None,"validation_failure_rate":validation_failures/successful if successful else None,"manual_review_rate":manual_reviews/successful if successful else None,"duplicate_detection":{"labeled_examples":len(duplicate_cases),"class_accuracy":sum(c["expected"]==c["predicted"] for c in duplicate_cases)/len(duplicate_cases) if duplicate_cases else None,"precision":duplicate_tp/(duplicate_tp+duplicate_fp) if duplicate_tp+duplicate_fp else None,"recall":duplicate_tp/(duplicate_tp+duplicate_fn) if duplicate_tp+duplicate_fn else None,"true_positives":duplicate_tp,"false_positives":duplicate_fp,"false_negatives":duplicate_fn},"mapping_suggestion_correctness":{"labeled_examples":0,"accuracy":None,"message":"No labeled mapping-rule dataset is configured."},"invoices":results}
     if output:
         output.parent.mkdir(parents=True,exist_ok=True); output.write_text(json.dumps(report,indent=2,ensure_ascii=False))
     return report

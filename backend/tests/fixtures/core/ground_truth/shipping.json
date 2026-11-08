@@ -1,0 +1,38 @@
+{
+  "supplier_name": "Freight and Goods BV",
+  "supplier_vat_number": "NL303030303B01",
+  "supplier_address": "Examplelaan 12, Amsterdam",
+  "customer_name": "Example Studio",
+  "customer_address": "Teststraat 2, Utrecht",
+  "customer_country": "Netherlands",
+  "invoice_number": "FG-26009",
+  "invoice_date": "2026-08-09",
+  "due_date": null,
+  "currency": "EUR",
+  "document_type": "invoice",
+  "subtotal": "100.00",
+  "discount_total": null,
+  "additional_charges": "15.00",
+  "total_vat": "21.00",
+  "invoice_total": "136.00",
+  "amount_due": "136.00",
+  "vat_breakdown": [
+    {
+      "rate": "21",
+      "taxable_amount": "100.00",
+      "tax_amount": "21.00"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Packing boxes",
+      "quantity": "1",
+      "unit_price": "100.00",
+      "vat_rate": "21",
+      "line_total": "100.00"
+    }
+  ],
+  "sequence": 8,
+  "duplicate_expected": "NO_DUPLICATE",
+  "duplicate_reference": null
+}

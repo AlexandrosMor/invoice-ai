@@ -1,0 +1,39 @@
+{
+  "supplier_name": "Discounted Stationery BV",
+  "supplier_vat_number": "NL202020202B01",
+  "supplier_address": "Examplelaan 12, Amsterdam",
+  "customer_name": "Example Studio",
+  "customer_address": "Teststraat 2, Utrecht",
+  "customer_country": "Netherlands",
+  "invoice_number": "DS-26008",
+  "invoice_date": "2026-08-08",
+  "due_date": null,
+  "currency": "EUR",
+  "document_type": "invoice",
+  "subtotal": "100.00",
+  "discount_total": "10.00",
+  "additional_charges": null,
+  "total_vat": "18.90",
+  "invoice_total": "108.90",
+  "amount_due": "108.90",
+  "vat_breakdown": [
+    {
+      "rate": "21",
+      "taxable_amount": "90.00",
+      "tax_amount": "18.90"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Paper cartons",
+      "quantity": "2",
+      "unit_price": "50.00",
+      "vat_rate": "21",
+      "line_total": "90.00",
+      "discount": "10.00"
+    }
+  ],
+  "sequence": 7,
+  "duplicate_expected": "NO_DUPLICATE",
+  "duplicate_reference": null
+}

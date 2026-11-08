@@ -1,0 +1,40 @@
+{
+  "supplier_name": "Export Parts BV",
+  "supplier_vat_number": "NL123450000B01",
+  "supplier_address": "Examplelaan 12, Amsterdam",
+  "customer_name": "Example Studio",
+  "customer_address": "Teststraat 2, Utrecht",
+  "customer_country": "Netherlands",
+  "invoice_number": "EX-26004",
+  "invoice_date": "2026-08-04",
+  "due_date": null,
+  "currency": "EUR",
+  "document_type": "invoice",
+  "subtotal": "50.00",
+  "discount_total": null,
+  "additional_charges": null,
+  "total_vat": "0.00",
+  "invoice_total": "50.00",
+  "amount_due": "50.00",
+  "vat_breakdown": [
+    {
+      "rate": "0",
+      "taxable_amount": "50.00",
+      "tax_amount": "0.00",
+      "treatment": "zero_rated"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Export goods",
+      "quantity": "1",
+      "unit_price": "50.00",
+      "vat_rate": "0",
+      "line_total": "50.00",
+      "vat_treatment": "zero_rated"
+    }
+  ],
+  "sequence": 3,
+  "duplicate_expected": "NO_DUPLICATE",
+  "duplicate_reference": null
+}

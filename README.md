@@ -1,8 +1,14 @@
-# 🧾 InvoiceAI
+<p align="center">
+  <img src="assets/invoiceai-logo.svg" alt="InvoiceAI — Invoice Operations" width="420">
+</p>
 
-![CI](https://github.com/AlexandrosMor/invoice-ai/actions/workflows/ci.yml/badge.svg?branch=main)
+<p align="center">
+  <img src="https://github.com/AlexandrosMor/invoice-ai/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status">
+</p>
 
-**Local-first invoice processing, with a human in control.** InvoiceAI uses a local Ollama vision model to extract invoice data, then helps you review, validate, and prepare it for export. Documents and records stay in local storage, and approval is always explicit.
+<p align="center"><strong>Local-first invoice processing, with a human in control.</strong></p>
+
+InvoiceAI uses a local Ollama vision model to extract invoice data, then helps you review, validate, and prepare it for export. Documents and records stay in local storage, and approval is always explicit.
 
 ## ✨ What’s included
 

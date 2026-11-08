@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="736" height="157" viewBox="0 0 736 157" role="img" aria-labelledby="title description">
+  <title id="title">InvoiceAI</title>
+  <desc id="description">InvoiceAI — Invoice Operations</desc>
+  <rect x="32" y="27" width="68" height="68" rx="22" fill="#DDF3EC"/>
+  <g fill="none" stroke="#16866B" stroke-width="2.7" stroke-linecap="round">
+    <path d="M66 43v36M48 61h36M53.3 48.3l25.4 25.4M78.7 48.3 53.3 73.7"/>
+    <path d="m66 43-2 5m2-5 2 5M84 61l-5-2m5 2-5 2M66 79l-2-5m2 5 2-5M48 61l5-2m-5 2 5 2"/>
+  </g>
+  <circle cx="66" cy="61" r="2.2" fill="#16866B"/>
+  <text x="120" y="59" font-family="Inter, Arial, sans-serif" font-size="38" font-weight="750" letter-spacing="-1.2" fill="#172D2A">invoice</text>
+  <text x="257" y="59" font-family="Inter, Arial, sans-serif" font-size="38" font-weight="750" letter-spacing="-1.2" fill="#99A7A4">ai</text>
+  <text x="120" y="92" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700" letter-spacing="3.1" fill="#99A7A4">INVOICE OPERATIONS</text>
+</svg>

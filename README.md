@@ -11,16 +11,18 @@
 
 ## ✨ What’s included
 
-- 🧠 **Local AI extraction** with Qwen3-VL through Ollama; no paid AI API required.
-- 📄 **PDF and image uploads** with multi-page PDF preview and extraction status updates.
-- 🔐 **Accounts and private workspaces** with user-scoped invoices, secure sessions, and profile management.
-- 🧾 **Structured invoice review** for supplier details, VAT rows, line items, and totals, plus an Advanced JSON view.
-- ✅ **Deterministic financial validation** for line arithmetic, discounts, fees, VAT breakdowns, credit notes, and currency precision.
-- 🔎 **Workspace-scoped duplicate checks** for identical files and invoice identity, with reasoned review for possible matches.
-- 🧮 **Configurable accounting mappings** for categories, GL accounts, tax treatment, suppliers, and provider IDs; suggestions require confirmation.
-- ✅ **Human approval** before export or synchronization.
-- 📦 **Canonical JSON export** and a clearly labeled mock Moneybird workflow.
-- ⏱️ **Processing timing details** and benchmark tools to measure local extraction runs.
+- 🧠 **Local AI extraction** with Qwen3-VL through Ollama, including supplier/customer identity, invoice dates and references, line items, discounts, charges, VAT, and totals.
+- 📄 **PDF and image uploads** with multi-page document preview and background extraction status updates.
+- 🟢 **Ollama readiness checks** that show whether the local service and configured model are available while an invoice is processing.
+- 🔐 **Accounts and private workspaces** with user-scoped invoices, secure sessions, profile management, and API key creation/revocation.
+- 🧾 **Human invoice review** with editable fields, source evidence where embedded PDF text permits it, correction history, and an Advanced JSON view.
+- ✅ **Deterministic financial validation** for line arithmetic, discounts, fees, VAT breakdowns and treatments, credit notes, and currency precision.
+- 🔎 **Workspace-scoped duplicate checks** for identical files, invoice identity, and possible matches, with a reasoned override for warnings.
+- 🧮 **Configurable accounting mappings** for supplier and description rules, GL categories/accounts, tax codes, and provider IDs; suggestions remain unconfirmed until reviewed.
+- ✅ **Explicit approval** before canonical JSON export or accounting preparation.
+- 🔌 **Scoped developer REST API** for asynchronous uploads, status and invoice reads, canonical JSON, and original document downloads.
+- 📦 **Mock Moneybird workflow** that prepares a draft only when mappings are confirmed and external IDs are configured; it makes no live provider calls.
+- 📊 **Dashboard, invoice history, and evaluation view** with extraction timing and local benchmark support.
 
 > InvoiceAI is an actively evolving local PoC. Real accounting connectors and production deployment infrastructure are not implemented yet.
 
@@ -76,14 +78,24 @@ npm run dev
 
 Open http://localhost:5173. Vite forwards `/api` calls to the backend.
 
+Check whether the backend can reach Ollama and whether the configured model is installed:
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+The response includes `ollama_available`, `model`, and `model_available`. The invoice review screen also checks and displays this status during processing.
+
 ## 🔄 Invoice workflow
 
 1. Create an account or sign in. Email syntax is checked, but email ownership is not verified in this PoC.
-2. Upload a PDF, JPG, or PNG (up to 10 MB). Extraction runs in a FastAPI background task.
-3. Open the invoice, compare the source and extracted fields, and save corrections.
-4. Run deterministic validation. Resolve errors, then explicitly approve.
-5. Review duplicate matches and accounting suggestions. Configure your own GL/tax codes in **Settings**; confirm mappings before accounting sync.
+2. Upload a PDF, JPG, or PNG (up to 10 MB). Extraction runs in a FastAPI background task; the review screen shows elapsed time and local Ollama/model readiness.
+3. Review supplier and customer details, invoice dates, VAT rows, line items, and totals. Compare available source evidence, edit fields or JSON, and save corrections.
+4. Run deterministic validation. Resolve errors and review warnings, then explicitly approve.
+5. Review duplicate matches and accounting suggestions. Configure GL accounts, tax codes, supplier references, and mapping rules in **Settings**; confirm line mappings before sync.
 6. Download canonical JSON or use **Sync Moneybird** for a mock draft. The mock requires configured GL and tax external IDs; no document is sent to Moneybird.
+
+Use **Invoice History** to search workspace invoices, **Evaluation** to inspect benchmark results, and **My Profile** to update account details or manage scoped API keys.
 
 ## 🔌 Developer API
 
@@ -96,7 +108,7 @@ curl -X POST http://localhost:8000/api/v1/invoices \
   -F "file=@invoice.pdf"
 ```
 
-The upload returns `202 Accepted` and an invoice ID while local extraction continues. Use `GET /api/v1/invoices/{id}` to check status, then `GET /api/v1/invoices/{id}/json` after processing completes. API keys only access the invoices and scopes of their owner. Use HTTPS outside local development.
+The upload returns `202 Accepted` and an invoice ID while local extraction continues. Use `GET /api/v1/invoices/{id}` to check status, then `GET /api/v1/invoices/{id}/json` after processing completes. The API also supports cursor-paginated invoice listing and original document download with the `invoices:document:read` scope. API keys only access the invoices and scopes of their owner. Use HTTPS outside local development.
 
 See [docs/API.md](docs/API.md) for scopes, endpoints, pagination, errors, rate limits, and a polling example.
 
@@ -149,7 +161,7 @@ python -m scripts.evaluate_invoices --dataset tests/fixtures/core --output tests
 
 The command writes measured output to `backend/tests/fixtures/core/results.json`; the Evaluation page reads the core report when it exists, then falls back to `backend/tests/fixtures/results.json`. Delete both report files to return the dashboard to its empty state. Benchmark runs are separate from unit tests and can take time because they invoke the local model. Each invoice can wait up to the configured Ollama timeout (600 seconds by default), so slow or stalled local inference can make a full run take a long time.
 
-The checked-in report under `tests/fixtures/results.json` is a real local Qwen3-VL run on the original single synthetic fixture: 60% field accuracy and 0% whole-invoice exact match. It is a pipeline smoke measurement, not a representative accuracy estimate. The new 13-document core fixture set has manually authored labels but has not been measured against the model in this change. Run the command above to produce metrics for that dataset; duplicate precision/recall require its labeled samples, and mapping suggestion accuracy remains unavailable until a labeled customer-rule dataset exists. No new accuracy claim is made here.
+The checked-in report under `tests/fixtures/results.json` is a real local Qwen3-VL run on the original single synthetic fixture: 60% field accuracy and 0% whole-invoice exact match. It is a pipeline smoke measurement, not a representative accuracy estimate. The 13-document core fixture set has manually authored labels, but no full model result is checked in yet. Run the command above to produce metrics for that dataset; duplicate precision/recall require its labeled samples, and mapping suggestion accuracy remains unavailable until a labeled customer-rule dataset exists. No broader accuracy claim is made here.
 
 Add fixture documents under `backend/tests/fixtures/invoices/` and manually verified JSON with the same basename under `backend/tests/fixtures/ground_truth/`. Ground truth must be verified by a person; do not derive it from model output. `python scripts/create_synthetic_fixtures.py` recreates the included synthetic PDF.
 

@@ -15,7 +15,7 @@
 - 📄 **PDF and image uploads** with multi-page document preview and background extraction status updates.
 - 🟢 **Ollama readiness checks** that show whether the local service and configured model are available while an invoice is processing.
 - 🔐 **Accounts and private workspaces** with user-scoped invoices, secure sessions, profile management, and API key creation/revocation.
-- 🧾 **Human invoice review** with editable fields, source evidence where embedded PDF text permits it, correction history, and an Advanced JSON view.
+- 🧾 **Human invoice review** with editable fields, text-derived source evidence where available, an audit trail, and an Advanced JSON view.
 - ✅ **Deterministic financial validation** for line arithmetic, discounts, fees, VAT breakdowns and treatments, credit notes, and currency precision.
 - 🔎 **Workspace-scoped duplicate checks** for identical files, invoice identity, and possible matches, with a reasoned override for warnings.
 - 🧮 **Configurable accounting mappings** for supplier and description rules, GL categories/accounts, tax codes, and provider IDs; suggestions remain unconfirmed until reviewed.
@@ -180,35 +180,47 @@ Metric definitions:
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for processing, validation, persistence, and accounting boundaries.
 
-### 🗺️ Future production architecture (planned)
+### Current application flow
 
-The following is a target direction, not the architecture currently implemented. InvoiceAI will evolve incrementally from its local SQLite and Ollama PoC. Production components may change as scalability, security, and operational requirements become clearer.
+This diagram describes the implementation in this repository. Uploads from the browser and developer API use the same invoice extraction path.
 
 ```mermaid
 flowchart TD
-    U["Customer Browser"] --> API["FastAPI Application"]
-    API --> AUTH["Authentication & Tenant Access"]
-    API --> DB[("PostgreSQL")]
-    API --> STORE[("Private Object Storage")]
-    API --> QUEUE["Durable Job Queue"]
-    QUEUE --> WORKER["Document Workers"]
-    WORKER --> AI["Vision / OCR Inference"]
-    WORKER --> DB
-    API --> SYNC["Integration Sync Workers"]
-    SYNC --> ERP["Accounting APIs"]
+    UI["Web UI: dashboard, upload, review, settings"] --> APP["FastAPI application"]
+    DEV["Developer REST API"] --> APP
+    APP --> AUTH["Session or scoped API-key auth"]
+    APP --> FILES[("Local document files")]
+    APP --> DB[("SQLite: invoices, users, audit and mappings")]
+    APP --> BG["FastAPI background task"]
+    BG --> PREP["PDF/image preprocessing"]
+    PREP --> MODEL["Local Ollama / Qwen3-VL"]
+    MODEL --> DATA["Canonical invoice JSON"]
+    DATA --> CHECKS["Financial validation, duplicate checks and available text evidence"]
+    CHECKS --> DB
+    DB --> REVIEW["Human correction, review and approval"]
+    REVIEW --> JSON["Canonical JSON export"]
+    REVIEW --> MOCK["Mock Moneybird draft"]
+
+    VERIFY["Targeted verification"] -. planned .-> CHECKS
+    LEARN["User-approved correction rules"] -. planned .-> REVIEW
+    BATCH["Batch upload and durable job queue"] -. planned .-> BG
+    SHEETS["CSV / XLSX export"] -. planned .-> JSON
+    classDef planned stroke-dasharray: 5 5,color:#64748b
+    class VERIFY,LEARN,BATCH,SHEETS planned
 ```
 
-- **FastAPI:** REST API and application orchestration.
-- **Authentication & Tenant Access:** Authentication, authorization, and tenant isolation.
-- **PostgreSQL:** Persistent storage for invoices, users, metadata, and processing states.
-- **Private Object Storage:** Secure storage of uploaded invoices and documents.
-- **Durable Job Queue:** Reliable asynchronous document processing, retries, and recovery.
-- **Document Workers:** PDF preprocessing, OCR, AI extraction, and validation.
-- **Vision / OCR Inference:** AI models responsible for extracting structured invoice data.
-- **Integration Sync Workers:** Reliable synchronization with external accounting platforms.
-- **Accounting APIs:** Moneybird, Exact Online, Xero, QuickBooks, and future integrations.
+The application currently uses SQLite and local file storage, FastAPI background tasks, and local Ollama/Qwen3-VL inference. Text evidence is available only when extracted values match embedded PDF text; scanned-image OCR evidence is not currently produced. Mapping decisions and audit events are stored separately from canonical invoice facts. The Moneybird adapter creates a local mock response and does not call an external service.
 
-The current PoC uses SQLite, local document storage, FastAPI background tasks, local Ollama/Qwen3-VL inference, and a basic account/session layer with per-user invoice ownership. It does not implement PostgreSQL, private object storage, durable queues, or integration workers. InvoiceAI will move incrementally toward the planned architecture; components may change as scalability, security, and operational requirements become clearer.
+### 🗺️ Planned capabilities
+
+The following items are goals from the next development phase and are not implemented in the current application:
+
+- Evidence-based field verification with targeted independent rechecks and field-level conflict states.
+- Explicitly approved reusable correction rules; the current audit trail records changes but does not learn or apply correction rules.
+- Multi-file batch upload, batch management, and a persistent SQLite-backed job queue with restart recovery. Current processing uses process-local FastAPI background tasks, so interrupted work is not durable.
+- CSV and XLSX exports. The current structured export is canonical JSON; invoice accounting synchronization is mock-only.
+
+The longer-term production architecture may replace SQLite, local file storage, and process-local tasks with PostgreSQL, private object storage, and durable workers after scaling and operational requirements are established.
 
 ## ℹ️ Current PoC limits
 
@@ -217,6 +229,8 @@ The current PoC uses SQLite, local document storage, FastAPI background tasks, l
 - The UI provides structured invoice fields and an advanced JSON view for flexible correction.
 - PDF preview uses the browser's built-in viewer; multi-page navigation and zoom are available there.
 - FastAPI background tasks are process-local. Interrupted processing is marked failed on restart; retry currently requires a new upload. Replace this with a durable queue before multi-user or production use.
+- Upload is currently one invoice per request. Batch upload, persistent jobs, and automated retry/recovery are planned; no worker service needs to be started separately in the current setup.
+- There is no reusable correction-learning system, targeted second-pass verification engine, or CSV/XLSX export yet. Corrections are saved to the invoice and recorded in its audit history.
 - Source evidence and coordinates are available only when the extracted value matches embedded PDF text. Scanned pages have no fabricated OCR quotes or bounding boxes and are marked for human review.
 - The core benchmark fixtures are synthetic and manually labeled. Their measured extraction metrics are not representative of real supplier documents; a commercial evaluation requires a larger, diverse, manually reviewed dataset.
 - The current account/session foundation uses a single SQLite database and local file storage. It is intended for a local PoC, not a concurrent or production deployment.

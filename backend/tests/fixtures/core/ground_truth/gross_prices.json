@@ -1,0 +1,40 @@
+{
+  "supplier_name": "Gross Price Trading BV",
+  "supplier_vat_number": "NL404040404B01",
+  "supplier_address": "Examplelaan 12, Amsterdam",
+  "customer_name": "Example Studio",
+  "customer_address": "Teststraat 2, Utrecht",
+  "customer_country": "Netherlands",
+  "invoice_number": "GP-26010",
+  "invoice_date": "2026-08-10",
+  "due_date": null,
+  "currency": "EUR",
+  "document_type": "invoice",
+  "subtotal": "100.00",
+  "discount_total": null,
+  "additional_charges": null,
+  "total_vat": "21.00",
+  "invoice_total": "121.00",
+  "amount_due": "121.00",
+  "vat_breakdown": [
+    {
+      "rate": "21",
+      "taxable_amount": "100.00",
+      "tax_amount": "21.00"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Gross listed item",
+      "quantity": "1",
+      "unit_price": "121.00",
+      "vat_rate": "21",
+      "line_total": "100.00",
+      "gross_total": "121.00",
+      "price_includes_vat": true
+    }
+  ],
+  "sequence": 9,
+  "duplicate_expected": "NO_DUPLICATE",
+  "duplicate_reference": null
+}

@@ -2,6 +2,8 @@ import os
 os.environ["DATABASE_URL"]="sqlite://"
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from datetime import datetime,timezone,timedelta
 from pathlib import Path
 
@@ -228,3 +230,95 @@ def test_api_keys_require_session_for_management_and_rate_limit_is_configurable(
     limited=client.get("/api/v1/invoices",headers=bearer)
     assert limited.status_code==429 and limited.headers.get("retry-after")=="60"
     api_client.close()
+
+
+def test_exact_document_duplicate_is_blocked_per_workspace_without_cross_user_disclosure(api_env):
+    client_a,_,_,_=api_env
+    registered_a=register(client_a,"duplicate-a@example.test")
+    first=client_a.post("/api/invoices",headers={"X-CSRF-Token":registered_a["csrf_token"]},files={"file":("one.pdf",b"%PDF-1.4 same contents","application/pdf")})
+    assert first.status_code==202
+    second=client_a.post("/api/invoices",headers={"X-CSRF-Token":registered_a["csrf_token"]},files={"file":("renamed.pdf",b"%PDF-1.4 same contents","application/pdf")})
+    assert second.status_code==409
+    assert second.json()["detail"]["code"]=="EXACT_FILE_DUPLICATE"
+    assert second.json()["detail"]["invoice_id"]==first.json()["id"]
+    client_b=TestClient(app_module.app)
+    try:
+        registered_b=register(client_b,"duplicate-b@example.test")
+        allowed=client_b.post("/api/invoices",headers={"X-CSRF-Token":registered_b["csrf_token"]},files={"file":("same.pdf",b"%PDF-1.4 same contents","application/pdf")})
+        assert allowed.status_code==202
+    finally:client_b.close()
+
+
+def test_database_constraint_closes_concurrent_exact_file_upload_race(api_env,tmp_path):
+    client,factory,_,_=api_env
+    register(client,"race@example.test");owner=user_id_for(factory,"race@example.test");barrier=Barrier(2)
+    def insert(index):
+        try:
+            with factory() as db:
+                barrier.wait()
+                db.add(Record(id=f"race-{index}",filename=f"{index}.pdf",path=str(tmp_path/f"{index}.pdf"),mime="application/pdf",status="UPLOADED",user_id=owner,file_hash="a"*64))
+                db.commit();return "inserted"
+        except Exception:return "rejected"
+    with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(insert,(1,2)))
+    assert sorted(results)==["inserted","rejected"]
+
+
+def test_database_constraint_closes_concurrent_vat_invoice_identity_race(api_env,tmp_path):
+    client,factory,_,_=api_env
+    register(client,"identity-a@example.test");register(client,"identity-b@example.test")
+    owner=user_id_for(factory,"identity-a@example.test");other=user_id_for(factory,"identity-b@example.test");barrier=Barrier(2)
+    def insert(index):
+        try:
+            with factory() as db:
+                barrier.wait()
+                db.add(Record(id=f"identity-{index}",filename=f"{index}.pdf",path=str(tmp_path/f"identity-{index}.pdf"),mime="application/pdf",status="NEEDS_REVIEW",user_id=owner,normalized_supplier_vat="nl123",normalized_invoice_number="inv7",document_type="invoice"))
+                db.commit();return "inserted"
+        except Exception:return "rejected"
+    with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(insert,(1,2)))
+    assert sorted(results)==["inserted","rejected"]
+    with factory() as db:
+        db.add(Record(id="other-owner-identity",filename="other.pdf",path=str(tmp_path/"other.pdf"),mime="application/pdf",user_id=other,normalized_supplier_vat="nl123",normalized_invoice_number="inv7",document_type="invoice"));db.commit()
+
+
+def test_startup_additively_backfills_hashes_and_stable_line_ids(api_env):
+    client,factory,tmp_path,_=api_env
+    register(client,"migration@example.test");owner=user_id_for(factory,"migration@example.test")
+    path=tmp_path/"legacy.pdf";content=b"%PDF-1.4 prior invoice";path.write_bytes(content)
+    legacy={"supplier_name":"Legacy Supplier","invoice_number":"L-1","line_items":[{"description":"Existing line","line_total":"10.00"}]}
+    with factory() as db:
+        db.add(Record(id="legacy-row",filename=path.name,path=str(path),mime="application/pdf",status="NEEDS_REVIEW",invoice_json=json.dumps(legacy),user_id=owner));db.commit()
+    with factory() as db:
+        app_module.migrate_workspace_duplicate_metadata(db);db.commit()
+        row=db.get(Record,"legacy-row");stored=json.loads(row.invoice_json)
+        assert row.file_hash==app_module.hashlib.sha256(content).hexdigest()
+        assert row.normalized_supplier=="legacysupplier" and row.normalized_invoice_number=="l1" and row.document_type=="invoice"
+        assert stored["supplier_name"]=="Legacy Supplier" and stored["line_items"][0]["description"]=="Existing line"
+        assert stored["line_items"][0]["line_id"]
+
+
+def test_accounting_configuration_suggestions_confirmation_and_user_isolation(api_env):
+    client_a,factory,tmp_path,_=api_env
+    registered=register(client_a,"mapping-a@example.test");owner=user_id_for(factory,"mapping-a@example.test")
+    gl=client_a.post("/api/accounting/gl-accounts",headers={"X-CSRF-Token":registered["csrf_token"]},json={"code":"4400","name":"Software subscriptions","category":"Software"})
+    tax=client_a.post("/api/accounting/tax-codes",headers={"X-CSRF-Token":registered["csrf_token"]},json={"code":"NL_PURCHASE_21","name":"Dutch purchase standard","jurisdiction":"NL","transaction_type":"purchase","treatment":"standard","rate":"21"})
+    assert gl.status_code==200 and tax.status_code==200,(gl.text,tax.text)
+    rule=client_a.post("/api/accounting/mapping-rules",headers={"X-CSRF-Token":registered["csrf_token"]},json={"name":"Microsoft subscriptions","supplier_key":"Microsoft","description_contains":"subscription","gl_account_id":gl.json()["id"],"tax_code_id":tax.json()["id"],"priority":10})
+    assert rule.status_code==200,rule.text
+    supplier=client_a.post("/api/accounting/suppliers",headers={"X-CSRF-Token":registered["csrf_token"]},json={"supplier_name":"Microsoft","supplier_vat_number":"NL123","external_id":"configured-contact-1"})
+    assert supplier.status_code==200 and supplier.json()["external_id"]=="configured-contact-1"
+    invoice=Invoice(supplier_name="Microsoft",customer_country="NL",invoice_number="M-1",currency="EUR",line_items=[{"description":"Microsoft 365 subscription","quantity":"1","unit_price":"10","vat_rate":"21","line_total":"10"}])
+    add_invoice(factory,tmp_path,owner,"mapping-invoice",invoice=invoice)
+    suggested=client_a.post("/api/invoices/mapping-invoice/accounting-mapping/suggest",headers={"X-CSRF-Token":registered["csrf_token"]})
+    assert suggested.status_code==200,suggested.text
+    item=suggested.json()["lines"][0]
+    assert item["source"]=="supplier_rule" and item["mapping_status"]=="SUGGESTED" and item["confirmed"] is False
+    saved=client_a.patch("/api/invoices/mapping-invoice/accounting-mapping",headers={"X-CSRF-Token":registered["csrf_token"]},json={"lines":[{"line_id":item["line_id"],"gl_account_id":gl.json()["id"],"tax_code_id":tax.json()["id"]}]})
+    assert saved.status_code==200 and saved.json()["mapping_status"]=="MAPPED"
+    other=TestClient(app_module.app)
+    try:
+        register(other,"mapping-b@example.test")
+        assert other.get("/api/accounting/gl-accounts").json()==[]
+        assert other.get("/api/accounting/suppliers").json()==[]
+        assert other.get("/api/invoices/mapping-invoice/accounting-mapping").status_code==404
+        assert other.patch("/api/accounting/mapping-rules/"+rule.json()["id"],headers={"X-CSRF-Token":other.get("/api/auth/csrf").json()["csrf_token"]},json={"active":False}).status_code==404
+    finally:other.close()

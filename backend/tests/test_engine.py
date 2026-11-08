@@ -51,7 +51,9 @@ def test_credit_note_negative_amounts_are_allowed():
 def test_decimal_rounding_and_duplicate_detection():
     invoice=Invoice(supplier_name="A",invoice_number="1",subtotal=Decimal("100"),total_vat=Decimal("21"),invoice_total=Decimal("121.01"))
     assert validate(invoice,[])["valid"]
-    assert any(x["code"]=="duplicate_invoice" for x in validate(invoice,[invoice])["issues"])
+    from duplicate_detection import classify_duplicate
+    result=classify_duplicate(invoice.model_dump(mode="json"),"new",[{"id":"existing","invoice":invoice.model_dump(mode="json"),"file_hash":"old"}])
+    assert result["classification"]=="POSSIBLE_DUPLICATE"
 
 def test_model_numeric_normalization_dutch_amounts_and_percent_rates():
     normalized=normalize_invoice_payload({"subtotal":"EUR 1.234,56","invoice_total":"(1.234,56)","line_items":[{"vat_rate":"21%","unit_price":"€ 1.234,56"}],"vat_breakdown":[{"rate":"9 %","tax_amount":"0,45"}]})

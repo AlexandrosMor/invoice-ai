@@ -11,9 +11,11 @@ def test_totals_and_vat_validation():
 
 def test_duplicate_detection():
     a=Invoice(supplier_name="Acme",invoice_number="X")
-    assert any("duplicate" in x for x in validate(a,[a])["errors"])
+    from duplicate_detection import classify_duplicate
+    result=classify_duplicate(a.model_dump(mode="json"),"hash",[{"id":"old","invoice":a.model_dump(mode="json"),"file_hash":"different"}])
+    assert result["classification"]=="POSSIBLE_DUPLICATE" and not result["blocks_approval"]
 
 def test_moneybird_mock():
     i=Invoice(supplier_name="Acme",invoice_number="X",currency="EUR",invoice_total=Decimal("12"))
     result=MoneybirdAdapter().sync(i,"abc",{})
-    assert result["success"] and result["mode"]=="mock" and result["external_document_id"]=="mock-abc"
+    assert not result["success"] and result["mode"]=="mock" and result["missing_mappings"]

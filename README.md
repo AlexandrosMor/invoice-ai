@@ -15,7 +15,10 @@
 - 📄 **PDF and image uploads** with multi-page PDF preview and extraction status updates.
 - 🔐 **Accounts and private workspaces** with user-scoped invoices, secure sessions, and profile management.
 - 🧾 **Structured invoice review** for supplier details, VAT rows, line items, and totals, plus an Advanced JSON view.
-- ✅ **Deterministic validation and human approval** before export or synchronization.
+- ✅ **Deterministic financial validation** for line arithmetic, discounts, fees, VAT breakdowns, credit notes, and currency precision.
+- 🔎 **Workspace-scoped duplicate checks** for identical files and invoice identity, with reasoned review for possible matches.
+- 🧮 **Configurable accounting mappings** for categories, GL accounts, tax treatment, suppliers, and provider IDs; suggestions require confirmation.
+- ✅ **Human approval** before export or synchronization.
 - 📦 **Canonical JSON export** and a clearly labeled mock Moneybird workflow.
 - ⏱️ **Processing timing details** and benchmark tools to measure local extraction runs.
 
@@ -45,7 +48,7 @@ ollama pull qwen3-vl:8b
 ollama serve
 ```
 
-Configure the values in `.env.example` in the backend process environment. The default Ollama timeout is 600 seconds and automatic retries are disabled to avoid repeating long local inference calls; `OLLAMA_TIMEOUT` is bounded to 5–600 seconds and `OLLAMA_RETRIES` to 0–2. `INVOICE_ROUNDING_TOLERANCE` defaults to EUR-style 0.02 monetary units. The server does not automatically load `.env`; export the values or use your preferred environment loader, then restart the backend.
+Configure the values in `.env.example` in the backend process environment. The default Ollama timeout is 600 seconds and automatic retries are disabled to avoid repeating long local inference calls; `OLLAMA_TIMEOUT` is bounded to 5–600 seconds and `OLLAMA_RETRIES` to 0–2. Without `INVOICE_ROUNDING_TOLERANCE`, validation uses currency precision defaults: 0.02 for two-decimal currencies, 0.002 for three-decimal currencies, and 1 unit for zero-decimal currencies. Set the variable to override that tolerance. The server does not automatically load `.env`; export the values or use your preferred environment loader, then restart the backend.
 
 ## 🐍 Start the backend
 
@@ -79,7 +82,8 @@ Open http://localhost:5173. Vite forwards `/api` calls to the backend.
 2. Upload a PDF, JPG, or PNG (up to 10 MB). Extraction runs in a FastAPI background task.
 3. Open the invoice, compare the source and extracted fields, and save corrections.
 4. Run deterministic validation. Resolve errors, then explicitly approve.
-5. Download canonical JSON or use **Sync Moneybird** to get a mock draft result. No document is sent to Moneybird.
+5. Review duplicate matches and accounting suggestions. Configure your own GL/tax codes in **Settings**; confirm mappings before accounting sync.
+6. Download canonical JSON or use **Sync Moneybird** for a mock draft. The mock requires configured GL and tax external IDs; no document is sent to Moneybird.
 
 ## 🔌 Developer API
 
@@ -114,6 +118,10 @@ The editor accepts the canonical invoice JSON. The schema and null behavior are 
 
 The invoice API preserves its existing canonical `invoice` property and adds an `extraction` metadata property for provenance/evidence and correction history. Validation responses preserve `valid`, `errors`, and `warnings`, and add severity-coded `issues` plus a `review_assessment`. New read endpoints are `GET /api/invoices/{id}/audit` and `GET /api/benchmarks/latest`. Existing status and approval endpoints are unchanged.
 
+Duplicate details are available at `GET /api/invoices/{id}/duplicates`; suspected matches can be overridden with a recorded reason. Exact document duplicates are rejected within the same user workspace, with a unique SQLite index protecting concurrent uploads. Confirmed invoice identity duplicates block approval.
+
+Accounting configuration is user-scoped: manage accounts at `/api/accounting/gl-accounts`, tax codes at `/api/accounting/tax-codes`, rules at `/api/accounting/mapping-rules`, and external supplier references at `/api/accounting/suppliers`. Invoice suggestions and explicit selections live separately from canonical extracted data at `/api/invoices/{id}/accounting-mapping`. SQLite schema changes are additive and preserve existing invoice rows and documents.
+
 ## 🧪 Tests
 
 ```bash
@@ -125,16 +133,23 @@ Tests do not call Ollama or download a model. The PDF fixture is synthetic and i
 
 ## 📊 Extraction benchmarks
 
+Generate or refresh the manually labeled core scenario set (Dutch 21% and 9%, multiple rates, zero-rate, reverse charge, credit note, multi-page table, discount, shipping, gross prices, invoice identity duplicate, exact-file re-upload):
+
+```bash
+cd backend
+python scripts/create_core_fixtures.py
+```
+
 Run a real model benchmark with Ollama running and the configured vision model available:
 
 ```bash
 cd backend
-python -m scripts.evaluate_invoices --dataset tests/fixtures
+python -m scripts.evaluate_invoices --dataset tests/fixtures/core --output tests/fixtures/core/results.json
 ```
 
-The command writes measured output to `backend/tests/fixtures/results.json`; the Evaluation page reads that file. Delete it to return the dashboard to its empty state. Benchmark runs are separate from unit tests and can take time because they invoke the local model.
+The command writes measured output to `backend/tests/fixtures/core/results.json`; the Evaluation page reads the core report when it exists, then falls back to `backend/tests/fixtures/results.json`. Delete both report files to return the dashboard to its empty state. Benchmark runs are separate from unit tests and can take time because they invoke the local model. Each invoice can wait up to the configured Ollama timeout (600 seconds by default), so slow or stalled local inference can make a full run take a long time.
 
-The current checked-in benchmark report is a real local Qwen3-VL run on the single synthetic fixture: 60% field accuracy, 0% whole-invoice exact match, 0% extraction failures, 31 ms preprocessing, 137.1 seconds model inference, and 137.1 seconds end-to-end processing. This one synthetic invoice is a pipeline smoke measurement only; it is not a representative accuracy estimate. The invoice correctly requires manual attention because currency and VAT/subtotal details were missed. Compared with the previous recorded run (~110 seconds), this run took longer and field accuracy was unchanged; one sample cannot establish a performance trend.
+The checked-in report under `tests/fixtures/results.json` is a real local Qwen3-VL run on the original single synthetic fixture: 60% field accuracy and 0% whole-invoice exact match. It is a pipeline smoke measurement, not a representative accuracy estimate. The new 13-document core fixture set has manually authored labels but has not been measured against the model in this change. Run the command above to produce metrics for that dataset; duplicate precision/recall require its labeled samples, and mapping suggestion accuracy remains unavailable until a labeled customer-rule dataset exists. No new accuracy claim is made here.
 
 Add fixture documents under `backend/tests/fixtures/invoices/` and manually verified JSON with the same basename under `backend/tests/fixtures/ground_truth/`. Ground truth must be verified by a person; do not derive it from model output. `python scripts/create_synthetic_fixtures.py` recreates the included synthetic PDF.
 
@@ -147,6 +162,7 @@ Metric definitions:
 - Critical false-accept rate is critical supplier/number/total mismatches among successfully extracted invoices that pass deterministic validation. It is null if there are no such accepted invoices.
 - Validation-failure and manual-review rates use successful extractions as the denominator. Review includes validation warnings/errors or missing source evidence.
 - Null accuracy is shown as unavailable when no ground-truth row scores a field; there is no production metric until a benchmark has been run.
+- Duplicate precision/recall uses labeled duplicate cases in the benchmark dataset. Mapping suggestion correctness is explicitly unavailable until labeled mapping examples are provided.
 
 ## 🏗️ Architecture
 
@@ -185,11 +201,12 @@ The current PoC uses SQLite, local document storage, FastAPI background tasks, l
 ## ℹ️ Current PoC limits
 
 - The mock Moneybird adapter does not make live API calls. Live synchronization must wait for verified official API documentation and credentials.
+- Accounting rules and codes are configurable per user, but organization-wide sharing, provider catalog import, and automated account-code recommendations are not implemented. VAT classification requires explicit user context or a matching user rule.
 - The UI provides structured invoice fields and an advanced JSON view for flexible correction.
 - PDF preview uses the browser's built-in viewer; multi-page navigation and zoom are available there.
 - FastAPI background tasks are process-local. Interrupted processing is marked failed on restart; retry currently requires a new upload. Replace this with a durable queue before multi-user or production use.
 - Source evidence and coordinates are available only when the extracted value matches embedded PDF text. Scanned pages have no fabricated OCR quotes or bounding boxes and are marked for human review.
-- The benchmark set currently contains one synthetic invoice and cannot support claims about general extraction accuracy. A real benchmark requires Ollama and a larger manually verified, anonymized dataset.
+- The core benchmark fixtures are synthetic and manually labeled. Their measured extraction metrics are not representative of real supplier documents; a commercial evaluation requires a larger, diverse, manually reviewed dataset.
 - The current account/session foundation uses a single SQLite database and local file storage. It is intended for a local PoC, not a concurrent or production deployment.
 - Session rate limiting is in-memory and resets when the process restarts. Use a shared limiter and operational controls before deploying multiple workers.
 - Registration does not verify email ownership, and account recovery is not implemented. Do not use it as a production identity system.

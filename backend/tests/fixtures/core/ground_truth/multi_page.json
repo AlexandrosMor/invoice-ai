@@ -1,0 +1,52 @@
+{
+  "supplier_name": "Pagewise Supplies BV",
+  "supplier_vat_number": "NL101010101B01",
+  "supplier_address": "Examplelaan 12, Amsterdam",
+  "customer_name": "Example Studio",
+  "customer_address": "Teststraat 2, Utrecht",
+  "customer_country": "Netherlands",
+  "invoice_number": "MP-26007",
+  "invoice_date": "2026-08-07",
+  "due_date": null,
+  "currency": "EUR",
+  "document_type": "invoice",
+  "subtotal": "60.00",
+  "discount_total": null,
+  "additional_charges": null,
+  "total_vat": "12.60",
+  "invoice_total": "72.60",
+  "amount_due": "72.60",
+  "vat_breakdown": [
+    {
+      "rate": "21",
+      "taxable_amount": "60.00",
+      "tax_amount": "12.60"
+    }
+  ],
+  "line_items": [
+    {
+      "description": "Page one item A",
+      "quantity": "1",
+      "unit_price": "20.00",
+      "vat_rate": "21",
+      "line_total": "20.00"
+    },
+    {
+      "description": "Page one item B",
+      "quantity": "1",
+      "unit_price": "20.00",
+      "vat_rate": "21",
+      "line_total": "20.00"
+    },
+    {
+      "description": "Page two item C",
+      "quantity": "1",
+      "unit_price": "20.00",
+      "vat_rate": "21",
+      "line_total": "20.00"
+    }
+  ],
+  "sequence": 6,
+  "duplicate_expected": "NO_DUPLICATE",
+  "duplicate_reference": null
+}

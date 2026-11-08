@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "frontend/src/style.css"
+        ],
+        "createdAt": "2026-11-08T11:22:03.741Z",
+        "reason": "Evidence excerpts use a green left marker to distinguish supporting source text; attention excerpts switch it to amber."
+      }
+    ]
+  }
+}

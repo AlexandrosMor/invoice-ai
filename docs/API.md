@@ -103,6 +103,27 @@ Errors use a JSON `detail` field. Common HTTP statuses:
 
 The default limit is 120 requests per API key per minute. Set `API_RATE_LIMIT_PER_MINUTE` to change it. The current limiter stores counters in process memory, so deployments with multiple backend workers enforce the limit per worker. API keys can optionally be configured to expire when created; revoking a key takes effect immediately.
 
+## Duplicate review and accounting mappings
+
+The browser endpoints remain session-authenticated and user-scoped:
+
+| Method and path | Description |
+| --- | --- |
+| `GET /api/invoices/{id}/duplicates` | Return classification and safe summaries for matching invoices in the same workspace |
+| `POST /api/invoices/{id}/duplicates/override` | Record a reason to proceed after a possible duplicate warning; confirmed duplicates cannot be overridden |
+| `GET/POST/PATCH/DELETE /api/accounting/gl-accounts` | Manage user-configured GL accounts and categories; list supports `active` and `search` filters |
+| `GET/POST/PATCH/DELETE /api/accounting/tax-codes` | Manage jurisdiction, transaction, treatment, rate, and optional provider ID; list supports active, jurisdiction, and transaction filters |
+| `GET/POST /api/accounting/mapping-rules` | List or add supplier and description matching rules |
+| `PATCH/DELETE /api/accounting/mapping-rules/{id}` | Update or remove a rule |
+| `GET/POST /api/accounting/suppliers` | List or configure explicit external supplier/contact IDs |
+| `GET /api/invoices/{id}/accounting-mapping` | Read the separate invoice accounting decision record |
+| `POST /api/invoices/{id}/accounting-mapping/suggest` | Calculate deterministic, unconfirmed suggestions |
+| `PATCH /api/invoices/{id}/accounting-mapping` | Save user-confirmed GL and tax code selections |
+
+GL accounts, tax codes, supplier references, and rules are private to the signed-in user. Suggestions match exact supplier rules before general customer rules; tax defaults require an explicit jurisdiction and matching purchase VAT treatment. A percentage by itself is not enough. Mapping decisions are stored separately from the canonical invoice JSON and changes are audited. The mock Moneybird adapter only returns a successful draft when every line has a confirmed GL and tax mapping with explicitly configured external IDs; it never calls Moneybird.
+
+An identical file upload within one workspace returns `409 EXACT_FILE_DUPLICATE` with the existing invoice ID. Uploading the same bytes into a different account is allowed. Exact invoice identity (matching supplier VAT ID, invoice number, and document type) is confirmed and blocks approval. A supplier-name-only or similar document match is a possible duplicate warning; review the linked invoice and record an override reason when appropriate.
+
 ## OpenAPI
 
 FastAPI serves the interactive API documentation at `/docs` and the OpenAPI schema at `/openapi.json`. The API is versioned under `/api/v1`; the browser's existing `/api` routes remain available for the application UI.

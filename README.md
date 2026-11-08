@@ -147,7 +147,7 @@ cd backend
 python -m scripts.evaluate_invoices --dataset tests/fixtures/core --output tests/fixtures/core/results.json
 ```
 
-The command writes measured output to `backend/tests/fixtures/results.json`; the Evaluation page reads that file. Delete it to return the dashboard to its empty state. Benchmark runs are separate from unit tests and can take time because they invoke the local model.
+The command writes measured output to `backend/tests/fixtures/core/results.json`; the Evaluation page reads the core report when it exists, then falls back to `backend/tests/fixtures/results.json`. Delete both report files to return the dashboard to its empty state. Benchmark runs are separate from unit tests and can take time because they invoke the local model. Each invoice can wait up to the configured Ollama timeout (600 seconds by default), so slow or stalled local inference can make a full run take a long time.
 
 The checked-in report under `tests/fixtures/results.json` is a real local Qwen3-VL run on the original single synthetic fixture: 60% field accuracy and 0% whole-invoice exact match. It is a pipeline smoke measurement, not a representative accuracy estimate. The new 13-document core fixture set has manually authored labels but has not been measured against the model in this change. Run the command above to produce metrics for that dataset; duplicate precision/recall require its labeled samples, and mapping suggestion accuracy remains unavailable until a labeled customer-rule dataset exists. No new accuracy claim is made here.
 

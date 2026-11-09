@@ -82,6 +82,8 @@ curl --get "$INVOICEAI_URL/api/v1/invoices" \
 
 Each list result includes its ID, filename, status, creation/update timestamps, and supplier/number/total/currency when available. The response includes `items` and `next_cursor` (`null` when there are no more results).
 
+The invoice detail response includes an `extraction` object with the selected `strategy` (`ollama`, `deterministic`, or `hybrid`), the actual `strategy_selected` (`ollama` or `deterministic`), model name, duration, and a fallback reason when hybrid extraction had to use Ollama. These fields are additive; the canonical invoice JSON schema is unchanged.
+
 ### Status and extraction errors
 
 Status values include `queued`, `processing`, `completed`, and `failed`. The detail endpoint provides a safe error summary for failed jobs. The JSON endpoint returns `409 Conflict` while extraction is queued or processing and when extraction failed; check the status endpoint before retrying.

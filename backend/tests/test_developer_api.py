@@ -49,7 +49,7 @@ def add_invoice(factory,tmp_path,user_id,invoice_id="invoice-1",status="NEEDS_RE
     path=tmp_path/(invoice_id+".pdf");path.write_bytes(b"%PDF-1.4 synthetic invoice")
     canonical=invoice or Invoice(supplier_name="Example BV",invoice_number="INV-1",invoice_date="2026-11-08",currency="EUR",subtotal="100.00",total_vat="21.00",invoice_total="121.00")
     with factory() as db:
-        record=Record(id=invoice_id,filename=path.name,path=str(path),mime="application/pdf",status=status,invoice_json=canonical.model_dump_json() if isinstance(canonical,Invoice) else json.dumps(canonical),validation_json=json.dumps({"valid":True,"errors":[],"warnings":[]}),extraction_json=json.dumps({"status":"succeeded","model":"qwen3-vl:8b","duration_ms":1200}),user_id=user_id,created_at="2026-11-08T10:00:00+00:00")
+        record=Record(id=invoice_id,filename=path.name,path=str(path),mime="application/pdf",status=status,invoice_json=canonical.model_dump_json() if isinstance(canonical,Invoice) else json.dumps(canonical),validation_json=json.dumps({"valid":True,"errors":[],"warnings":[]}),extraction_json=json.dumps({"status":"succeeded","model":"qwen3-vl:8b","strategy":"hybrid","strategy_selected":"deterministic","duration_ms":1200,"fallback_reason":None}),user_id=user_id,created_at="2026-11-08T10:00:00+00:00")
         db.add(record);db.commit()
     return path
 
@@ -154,6 +154,10 @@ def test_list_cursor_status_search_and_read_json_uses_decimal_strings(api_env):
     assert page["items"][0]["id"]!=page2["items"][0]["id"]
     assert client.get("/api/v1/invoices?status=APPROVED",headers=headers).json()["items"][0]["id"]=="beta"
     assert client.get("/api/v1/invoices?search=Alpha",headers=headers).json()["items"][0]["id"]=="alpha"
+    detail=client.get("/api/v1/invoices/alpha",headers=headers).json()
+    assert detail["extraction"]["strategy"]=="hybrid"
+    assert detail["extraction"]["strategy_selected"]=="deterministic"
+    assert detail["extraction"]["fallback_reason"] is None
     bad_cursor=client.get("/api/v1/invoices?cursor=not-a-cursor",headers=headers)
     assert bad_cursor.status_code==422
     data=client.get("/api/v1/invoices/alpha/json",headers=headers).json()

@@ -1,11 +1,14 @@
 # Architecture and data flow
 
 ```text
-Browser upload → FastAPI upload/controller → local file + SQLite record
+Browser or developer API → FastAPI upload/controller → local file + SQLite record
                                       ↓ background task
                     DocumentProcessor (PDF pages / image validation)
-                                      ↓ page images
-                    InvoiceExtractor (Ollama vision, schema-constrained JSON)
+                                      ↓ document analysis
+                    Extraction strategy (configured)
+                    ├─ deterministic embedded-text baseline
+                    ├─ hybrid: deterministic when evidenced/valid, else Ollama
+                    └─ Ollama Qwen3-VL (backwards-compatible default)
                                       ↓ canonical Pydantic Invoice
                     InvoiceRepository (SQLite record) → review UI
                                       ↓ corrections
@@ -14,7 +17,9 @@ Browser upload → FastAPI upload/controller → local file + SQLite record
                     JSON export OR AccountingAdapter → mock Moneybird draft
 ```
 
-`DocumentProcessor` verifies image readability and renders PDF pages with PyMuPDF. `InvoiceExtractor` sends all pages as images, marks document instructions as untrusted, and validates the returned JSON against the canonical Pydantic schema. `InvoiceValidator` is independent of model output and reports missing required fields, invalid or ambiguous dates, line and document arithmetic mismatches, VAT differences, and currency issues. Normalization accepts Dutch/English written months and unambiguous numeric dates; ambiguous numeric dates stay unchanged and require correction.
+`DocumentProcessor` verifies image readability, extracts embedded PDF text/spans, and renders PDF pages with PyMuPDF. `analyze_document` records page count, document kind, readable-text availability, and a lightweight language hint; supplier templates are not configured and supplier identity is not treated as known by this stage. `InvoiceExtractor` sends all pages as images to local Qwen3-VL, marks document instructions as untrusted, and validates the returned JSON against the canonical Pydantic schema. `DeterministicTextStrategy` is an intentionally conservative baseline for explicit labels and common digital-PDF table shapes; it does not OCR images or invent missing amounts. `HybridExtractionStrategy` uses that baseline only when its required values have embedded-text evidence and deterministic validation returns ready for review. Otherwise it invokes the existing Qwen strategy. The default remains `ollama` until the strategies are compared on an appropriate labeled dataset.
+
+All strategies normalize into the same Pydantic `Invoice` and use the same downstream duplicate detection and validation. Mathematical reconciliation is only one signal and does not prove extraction correctness. Normalization accepts Dutch/English written months and unambiguous numeric dates; ambiguous numeric dates stay unchanged and trigger review/fallback.
 
 The SQLAlchemy `Record` is the local repository boundary in this small PoC. It persists status, original path, SHA-256 file hash, normalized invoice identity, canonical invoice JSON, validation, duplicate decisions, synchronization result, extraction metadata, and an optional user owner. Additive SQLite setup adds new columns and tables without dropping invoice rows or files. SQLite also stores user accounts and hashed server-side sessions. Invoice queries always filter by the authenticated user; legacy records remain unassigned until explicitly assigned with the documented command. The API layer handles HTTP validation and workflow transitions. Upload starts a background task and returns immediately. The task moves through `UPLOADED`, `PROCESSING`, and `NEEDS_REVIEW` or `FAILED`.
 
@@ -37,4 +42,4 @@ The canonical invoice is stored separately from extraction metadata. Metadata in
 
 Validation uses `Decimal`, configurable `INVOICE_ROUNDING_TOLERANCE`, currency precision defaults, discount/fee conventions, gross-line support, and ERROR/WARNING/INFO issues. It never overwrites extracted amounts with calculated values. It runs immediately after extraction and again after a user requests validation. Warnings remain visible while explicit approval remains a separate human action. `READY_FOR_REVIEW`, `NEEDS_ATTENTION`, and `VALIDATION_FAILED` are assessment labels and do not replace persisted workflow statuses.
 
-The benchmark command invokes the configured local model and compares output to manually maintained ground truth. The core fixture generator creates 13 synthetic invoices for VAT, credit note, multi-page, discounts, fees, gross prices, identity duplicates, and exact file re-uploads. Metrics include field and invoice exact match, financial/VAT/line-item accuracy, latency, duplicate precision/recall, and critical false acceptance. Mapping suggestion correctness stays null until labeled mapping examples exist. A measured core report is preferred by the Evaluation page when present; otherwise it reads the original report. Synthetic fixtures do not establish general-world accuracy.
+The benchmark command compares output to manually maintained ground truth. `scripts/compare_extraction_strategies.py` runs selected strategies against the same sorted dataset and writes detailed reports plus an aggregate comparison. The core fixture generator creates 13 synthetic invoices for VAT, credit notes, multi-page layouts, discounts, fees, gross prices, identity duplicates, and exact file re-uploads. Metrics include per-field and grouped accuracy, exact invoice match, financial/VAT/line-item accuracy, latency percentiles, duplicate precision/recall, and critical false acceptance. The deterministic baseline measured 99.1% field accuracy on this synthetic set, while Qwen has not yet been evaluated on that same dataset. Mapping suggestion correctness stays null until labeled mapping examples exist. Synthetic fixtures do not establish general-world accuracy. Keep private documents and reports outside version control.

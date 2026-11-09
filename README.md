@@ -11,7 +11,7 @@
 
 ## ✨ What’s included
 
-- 🧠 **Local AI extraction** with Qwen3-VL through Ollama, including supplier/customer identity, invoice dates and references, line items, discounts, charges, VAT, and totals.
+- 🧠 **Pluggable local extraction** with the backwards-compatible Qwen3-VL/Ollama strategy, a conservative embedded-text baseline, and an opt-in hybrid selector.
 - 📄 **PDF and image uploads** with multi-page document preview and background extraction status updates.
 - 🟢 **Ollama readiness checks** that show whether the local service and configured model are available while an invoice is processing.
 - 🔐 **Accounts and private workspaces** with user-scoped invoices, secure sessions, profile management, and API key creation/revocation.
@@ -50,7 +50,7 @@ ollama pull qwen3-vl:8b
 ollama serve
 ```
 
-Configure the values in `.env.example` in the backend process environment. The default Ollama timeout is 600 seconds and automatic retries are disabled to avoid repeating long local inference calls; `OLLAMA_TIMEOUT` is bounded to 5–600 seconds and `OLLAMA_RETRIES` to 0–2. Without `INVOICE_ROUNDING_TOLERANCE`, validation uses currency precision defaults: 0.02 for two-decimal currencies, 0.002 for three-decimal currencies, and 1 unit for zero-decimal currencies. Set the variable to override that tolerance. The server does not automatically load `.env`; export the values or use your preferred environment loader, then restart the backend.
+Configure the values in `.env.example` in the backend process environment. Set `INVOICE_EXTRACTION_STRATEGY` to `ollama` (default), `deterministic`, or `hybrid`. The hybrid strategy uses the deterministic text parser only when required fields have embedded-text evidence and deterministic validation is ready for review; otherwise it falls back to Ollama. It does not OCR scanned pages or use supplier templates yet. The default Ollama timeout is 600 seconds and automatic retries are disabled to avoid repeating long local inference calls; `OLLAMA_TIMEOUT` is bounded to 5–600 seconds and `OLLAMA_RETRIES` to 0–2. Without `INVOICE_ROUNDING_TOLERANCE`, validation uses currency precision defaults: 0.02 for two-decimal currencies, 0.002 for three-decimal currencies, and 1 unit for zero-decimal currencies. Set the variable to override that tolerance. The server does not automatically load `.env`; export the values or use your preferred environment loader, then restart the backend.
 
 ## 🐍 Start the backend
 
@@ -108,7 +108,7 @@ curl -X POST http://localhost:8000/api/v1/invoices \
   -F "file=@invoice.pdf"
 ```
 
-The upload returns `202 Accepted` and an invoice ID while local extraction continues. Use `GET /api/v1/invoices/{id}` to check status, then `GET /api/v1/invoices/{id}/json` after processing completes. The API also supports cursor-paginated invoice listing and original document download with the `invoices:document:read` scope. API keys only access the invoices and scopes of their owner. Use HTTPS outside local development.
+The upload returns `202 Accepted` and an invoice ID while local extraction continues. Use `GET /api/v1/invoices/{id}` to check status and the selected extraction strategy, then `GET /api/v1/invoices/{id}/json` after processing completes. The API also supports cursor-paginated invoice listing and original document download with the `invoices:document:read` scope. API keys only access the invoices and scopes of their owner. Use HTTPS outside local development.
 
 See [docs/API.md](docs/API.md) for scopes, endpoints, pagination, errors, rate limits, and a polling example.
 
@@ -152,16 +152,25 @@ cd backend
 python scripts/create_core_fixtures.py
 ```
 
-Run a real model benchmark with Ollama running and the configured vision model available:
+Run one strategy against a labeled dataset. Keep private invoices and reports outside the repository:
 
 ```bash
 cd backend
-python -m scripts.evaluate_invoices --dataset tests/fixtures/core --output tests/fixtures/core/results.json
+python -m scripts.evaluate_invoices --dataset tests/fixtures/core --strategy deterministic --output /tmp/invoiceai-deterministic.json
 ```
 
-The command writes measured output to `backend/tests/fixtures/core/results.json`; the Evaluation page reads the core report when it exists, then falls back to `backend/tests/fixtures/results.json`. Delete both report files to return the dashboard to its empty state. Benchmark runs are separate from unit tests and can take time because they invoke the local model. Each invoice can wait up to the configured Ollama timeout (600 seconds by default), so slow or stalled local inference can make a full run take a long time.
+Compare strategies on the same dataset (the Ollama and hybrid strategies require the configured local model):
 
-The checked-in report under `tests/fixtures/results.json` is a real local Qwen3-VL run on the original single synthetic fixture: 60% field accuracy and 0% whole-invoice exact match. It is a pipeline smoke measurement, not a representative accuracy estimate. The 13-document core fixture set has manually authored labels, but no full model result is checked in yet. Run the command above to produce metrics for that dataset; duplicate precision/recall require its labeled samples, and mapping suggestion accuracy remains unavailable until a labeled customer-rule dataset exists. No broader accuracy claim is made here.
+```bash
+python -m scripts.compare_extraction_strategies \
+  --dataset tests/fixtures/core \
+  --output-dir /tmp/invoiceai-strategy-comparison \
+  --strategies deterministic,ollama,hybrid
+```
+
+The single-strategy command writes a report to the selected output path. The comparison command writes one detailed report per strategy and a summary `comparison.json`. To populate the Evaluation page, save a report to `backend/tests/fixtures/core/results.json`; it prefers that file, then falls back to `backend/tests/fixtures/results.json`. Delete the generated core report to return the dashboard to its checked-in fallback. Benchmark runs are separate from unit tests and can take time because they invoke the local model. Each invoice can wait up to the configured Ollama timeout (600 seconds by default), so slow or stalled local inference can make a full run take a long time.
+
+The checked-in report under `tests/fixtures/results.json` is a real local Qwen3-VL run on the original single synthetic fixture: 60% field accuracy and 0% whole-invoice exact match. It is a pipeline smoke measurement, not a representative accuracy estimate. A local deterministic-parser run on the 13 synthetic core fixtures measured 99.1% field accuracy, 92.3% whole-invoice exact match, 100% line-item accuracy, 0% critical false acceptance, 30.8% manual review, and 28.9/49.3 ms p50/p95 processing. These fixtures are purpose-built and do not establish real-world performance. Qwen3-VL and hybrid have not yet been compared on this same core dataset; see [benchmark methodology and baseline](docs/EXTRACTION_BENCHMARKS.md). Duplicate metrics are also synthetic, and mapping suggestion accuracy remains unavailable until labeled mapping examples exist.
 
 Add fixture documents under `backend/tests/fixtures/invoices/` and manually verified JSON with the same basename under `backend/tests/fixtures/ground_truth/`. Ground truth must be verified by a person; do not derive it from model output. `python scripts/create_synthetic_fixtures.py` recreates the included synthetic PDF.
 

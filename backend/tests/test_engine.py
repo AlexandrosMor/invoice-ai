@@ -140,6 +140,7 @@ def test_benchmark_aggregates_per_invoice_metrics():
     result=evaluate_dataset(FIXTURES,extractor=EvalExtractor())
     assert result["total_invoices"]==1 and result["overall_field_accuracy"]==1
     assert result["whole_invoice_exact_match_rate"]==1 and result["average_processing_time_ms"]>=10
+    assert result["average_inference_time_ms"]==10 and result["average_strategy_time_ms"] is not None
 
 def test_processing_claim_does_not_start_duplicate_task():
     from app import Session,Record,process_invoice

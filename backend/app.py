@@ -22,7 +22,8 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, VerificationError
 from invoice_domain import Invoice
 from document_processing import DocumentProcessor
-from extraction import InvoiceExtractor, ExtractionError, IMPORTANT_FIELDS
+from extraction import InvoiceExtractor, ExtractionError, IMPORTANT_FIELDS, PIPELINE_VERSION
+from extraction_strategies import analyze_document, create_extractor
 from validation import validate
 from duplicate_detection import classify_duplicate, normalize_identity
 from accounting_mapping import AccountingMappingService, MappingRepository, SupplierMappingService
@@ -210,7 +211,7 @@ async def lifespan(app):
         interrupted=recovery_db.scalars(select(Record).where(Record.status=="PROCESSING")).all()
         for row in interrupted:
             message="Processing was interrupted when the application stopped. Re-upload the document to retry extraction."
-            row.status="FAILED"; row.extraction_json=json.dumps({"status":"failed","error":message,"pipeline_version":"2.0.0","timestamp":datetime.now(timezone.utc).isoformat()})
+            row.status="FAILED"; row.extraction_json=json.dumps({"status":"failed","error":message,"pipeline_version":PIPELINE_VERSION,"timestamp":datetime.now(timezone.utc).isoformat()})
             row.validation_json=json.dumps({"valid":False,"severity":"ERROR","errors":[message],"warnings":[],"issues":[{"severity":"ERROR","code":"interrupted_processing","message":message}]})
             audit(recovery_db,row.id,"interrupted_processing_recovered",{})
         if migrated:
@@ -447,11 +448,15 @@ def process_invoice(invoice_id: str,user_id: Optional[str]=None):
             preprocess_started=time.monotonic()
             document=DocumentProcessor.process(Path(r.path),r.mime)
             preprocessing_duration=round((time.monotonic()-preprocess_started)*1000,2)
-            extractor=InvoiceExtractor()
+            extractor=create_extractor()
             result=extractor.extract(document)
+            result.setdefault("document_analysis",analyze_document(document))
             result["preprocessing_duration_ms"]=preprocessing_duration
             result["total_processing_duration_ms"]=round((time.monotonic()-started)*1000,2)
-            result["model_config"]={"temperature":0,"seed":42,"timeout_seconds":extractor.timeout,"max_retries":extractor.retries}
+            selected=result.get("strategy_selected",getattr(extractor,"name","ollama"))
+            model_strategy=getattr(extractor,"model",extractor)
+            result["model_config"]={"timeout_seconds":getattr(model_strategy,"timeout",None),"max_retries":getattr(model_strategy,"retries",None),"strategy":result.get("strategy",getattr(extractor,"name","ollama")),"selected_strategy":selected}
+            if selected=="ollama":result["model_config"].update({"temperature":0,"seed":42})
             invoice=result["invoice"]
             result["invoice"]=invoice.model_dump(mode="json")
             r.invoice_json=invoice.model_dump_json(); r.status="NEEDS_REVIEW"
@@ -472,12 +477,12 @@ def process_invoice(invoice_id: str,user_id: Optional[str]=None):
             r.validation_json=json.dumps(validation_result)
             audit(db,r.id,"extraction_succeeded",{k:result[k] for k in ("model","pipeline_version","duration_ms","total_processing_duration_ms","timestamp","attempts","document_kind","status")})
             audit(db,r.id,"validation",{"severity":validation_result["severity"],"review_assessment":validation_result["review_assessment"],"issues":validation_result["issues"]})
-            log_record={"event":"invoice_extraction_succeeded","invoice_id":r.id,"model":result["model"],"duration_ms":result["total_processing_duration_ms"],"document_kind":result["document_kind"]}
+            log_record={"event":"invoice_extraction_succeeded","invoice_id":r.id,"model":result["model"],"strategy":result.get("strategy",getattr(extractor,"name","ollama")),"strategy_selected":result.get("strategy_selected",getattr(extractor,"name","ollama")),"duration_ms":result["total_processing_duration_ms"],"document_kind":result["document_kind"]}
             logging.getLogger("invoiceai").info(json.dumps(log_record))
         except Exception as e:
             r.status="FAILED"; r.validation_json=json.dumps({"valid":False,"severity":"ERROR","errors":[str(e)],"warnings":[],"issues":[{"severity":"ERROR","code":"extraction_failed","message":str(e)}]})
-            r.extraction_json=json.dumps({"status":"failed","error":str(e),"model":os.getenv("OLLAMA_MODEL","qwen3-vl:8b"),"pipeline_version":"2.0.0","duration_ms":round((time.monotonic()-started)*1000,2),"timestamp":datetime.now(timezone.utc).isoformat()})
-            audit(db,r.id,"extraction_failed",{"error":str(e),"model":os.getenv("OLLAMA_MODEL","qwen3-vl:8b"),"pipeline_version":"2.0.0","duration_ms":round((time.monotonic()-started)*1000,2)})
+            r.extraction_json=json.dumps({"status":"failed","error":str(e),"model":os.getenv("OLLAMA_MODEL","qwen3-vl:8b"),"pipeline_version":PIPELINE_VERSION,"duration_ms":round((time.monotonic()-started)*1000,2),"timestamp":datetime.now(timezone.utc).isoformat()})
+            audit(db,r.id,"extraction_failed",{"error":str(e),"model":os.getenv("OLLAMA_MODEL","qwen3-vl:8b"),"pipeline_version":PIPELINE_VERSION,"duration_ms":round((time.monotonic()-started)*1000,2)})
             logging.getLogger("invoiceai").error(json.dumps({"event":"invoice_extraction_failed","invoice_id":r.id,"error_type":type(e).__name__}))
         db.commit()
 
@@ -1004,7 +1009,8 @@ def developer_get_invoice(invoice_id: str,auth: dict=Depends(require_api_scope("
         links={"json":f"/api/v1/invoices/{record.id}/json"}
         if "invoices:document:read" in auth["scopes"]: links["document"]=f"/api/v1/invoices/{record.id}/document"
         failed=record.status=="FAILED"
-        return DeveloperInvoiceDetail(id=record.id,filename=record.filename,created_at=record.created_at,status=record.status,supplier_name=invoice.get("supplier_name"),invoice_number=invoice.get("invoice_number"),extraction={"status":extraction.get("status") or ("failed" if failed else record.status.casefold()),"model":extraction.get("model"),"duration_ms":extraction.get("duration_ms")},validation={"valid":validation.get("valid") if not failed else False,"errors":["Invoice extraction failed. Check backend logs or upload the document again."] if failed else validation.get("errors",[]),"warnings":[] if failed else validation.get("warnings",[])},approved=record.status=="APPROVED",review_status=record.status,links=links)
+        model_config=extraction.get("model_config") or {}
+        return DeveloperInvoiceDetail(id=record.id,filename=record.filename,created_at=record.created_at,status=record.status,supplier_name=invoice.get("supplier_name"),invoice_number=invoice.get("invoice_number"),extraction={"status":extraction.get("status") or ("failed" if failed else record.status.casefold()),"model":extraction.get("model"),"strategy":extraction.get("strategy"),"strategy_selected":extraction.get("strategy_selected") or model_config.get("selected_strategy"),"duration_ms":extraction.get("duration_ms"),"fallback_reason":extraction.get("fallback_reason")},validation={"valid":validation.get("valid") if not failed else False,"errors":["Invoice extraction failed. Check backend logs or upload the document again."] if failed else validation.get("errors",[]),"warnings":[] if failed else validation.get("warnings",[])},approved=record.status=="APPROVED",review_status=record.status,links=links)
 
 @app.get("/api/v1/invoices/{invoice_id}/json",response_model=DeveloperInvoiceJson,tags=["Developer API v1"],summary="Get canonical invoice JSON",description="Required scope: `invoices:read`. Returns the latest saved invoice data as unapproved unless the invoice has been explicitly approved.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:read"},404:{"description":"Invoice not found"},409:{"description":"Extraction is still running or failed"},429:{"description":"Per-key rate limit exceeded"}})
 def developer_invoice_json(invoice_id: str,auth: dict=Depends(require_api_scope("invoices:read"))):

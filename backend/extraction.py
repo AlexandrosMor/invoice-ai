@@ -8,7 +8,7 @@ from document_processing import ProcessedDocument
 from normalization import normalize_invoice_payload
 
 log=logging.getLogger("invoiceai.extraction")
-PIPELINE_VERSION="2.0.0"
+PIPELINE_VERSION="2.1.0"
 IMPORTANT_FIELDS=("supplier_name","supplier_address","supplier_vat_number","supplier_kvk_number","supplier_iban","customer_name","customer_address","customer_vat_number","invoice_number","invoice_date","due_date","delivery_date","payment_date","currency","purchase_order_reference","subtotal","discount_total","additional_charges","total_vat","invoice_total","amount_paid","amount_due")
 
 class ExtractionError(RuntimeError): pass
@@ -33,6 +33,8 @@ def derive_evidence(invoice: Invoice, document: ProcessedDocument) -> dict[str,d
     return result
 
 class InvoiceExtractor:
+    name = "ollama"
+
     def __init__(self):
         self.url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
         self.model=os.getenv("OLLAMA_MODEL","qwen3-vl:8b")
@@ -65,7 +67,7 @@ class InvoiceExtractor:
                 if not isinstance(raw,str): raise ValueError("missing message content")
                 invoice=Invoice.model_validate(normalize_invoice_payload(json.loads(raw)))
                 evidence=derive_evidence(invoice,document)
-                return {"invoice":invoice,"evidence":evidence,"model":self.model,"pipeline_version":PIPELINE_VERSION,"duration_ms":round((time.monotonic()-started)*1000,2),"timestamp":datetime.now(timezone.utc).isoformat(),"attempts":attempt+1,"document_kind":document.document_kind,"status":"succeeded"}
+                return {"invoice":invoice,"evidence":evidence,"model":self.model,"pipeline_version":PIPELINE_VERSION,"strategy":"ollama","strategy_selected":"ollama","duration_ms":round((time.monotonic()-started)*1000,2),"timestamp":datetime.now(timezone.utc).isoformat(),"attempts":attempt+1,"document_kind":document.document_kind,"status":"succeeded"}
             except httpx.ConnectError as e:
                 last=ExtractionError(f"Cannot connect to Ollama at {self.url}. Start it with `ollama serve` and pull {self.model}.")
             except httpx.TimeoutException as e:

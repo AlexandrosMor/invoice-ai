@@ -95,7 +95,7 @@ The response includes `ollama_available`, `model`, and `model_available`. The in
 5. Review duplicate matches and accounting suggestions. Configure GL accounts, tax codes, supplier references, and mapping rules in **Settings**; confirm line mappings before sync.
 6. Download canonical JSON or use **Sync Moneybird** for a mock draft. The mock requires configured GL and tax external IDs; no document is sent to Moneybird.
 
-Use **Invoice History** to search workspace invoices, **Evaluation** to inspect benchmark results, and **My Profile** to update account details or manage scoped API keys.
+Use **Invoice History** to search workspace invoices, **Evaluation** to inspect benchmark results, and **My Profile** to update account details or manage scoped API keys. Each account starts with a private organization. Owners and admins can add existing InvoiceAI accounts as members, assign roles, and suspend memberships; members can switch only to workspaces where they have an active membership. Upload, correction, accounting setup, duplicate overrides, and approval are restricted by role in the backend.
 
 ## 🔌 Developer API
 
@@ -112,11 +112,13 @@ The upload returns `202 Accepted` and an invoice ID while local extraction conti
 
 See [docs/API.md](docs/API.md) for scopes, endpoints, pagination, errors, rate limits, and a polling example.
 
-Invoices are scoped to the signed-in account. The browser uses an HttpOnly session cookie, a readable CSRF token cookie/header pair, and same-site cookie settings. Sessions expire after 14 days. Passwords are hashed with Argon2id; authentication attempts are rate-limited in process memory. Set `COOKIE_SECURE=true` behind HTTPS. For a different frontend origin, set `FRONTEND_ORIGIN` for the backend.
+Invoices are scoped to the active organization. Browser sessions store the selected organization and the server verifies active membership on each request. API keys are bound to the creator's organization at creation; a key cannot select a workspace, and existing invoice scopes still control developer API access. The browser uses an HttpOnly session cookie, a readable CSRF token cookie/header pair, and same-site cookie settings. Sessions expire after 14 days. Passwords are hashed with Argon2id; authentication attempts are rate-limited in process memory. Set `COOKIE_SECURE=true` behind HTTPS. For a different frontend origin, set `FRONTEND_ORIGIN` for the backend.
+
+Organization endpoints are `GET /api/organizations/current`, `GET /api/organizations/current/members`, `POST /api/organizations/current/members`, `PATCH /api/organizations/current/members/{member_id}`, and `POST /api/organizations/active`. Adding members currently requires an existing account; invitations are not implemented. Membership roles are `OWNER`, `ADMIN`, `ACCOUNTANT`, `APPROVER`, and `VIEWER`. Financial approval routing and organization-owned accounting configuration are planned follow-up work.
 
 ### 🗃️ Existing SQLite data
 
-On startup, the app adds the ownership column without deleting existing invoices. Existing rows remain unassigned and are invisible to user accounts until an administrator explicitly assigns them. Create the destination account through the registration page, then review the dry-run list and assign only if appropriate:
+On startup, the app adds workspace ownership without deleting existing invoices. Invoices already owned by a user are migrated into that user's private organization. Rows with no owner remain unassigned and invisible to user accounts. If an unowned row should be assigned, create the destination account and review the dry-run list first:
 
 ```bash
 cd backend

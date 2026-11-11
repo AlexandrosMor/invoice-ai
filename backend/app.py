@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import create_engine, String, Text, select, inspect, text, update, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import create_engine, String, Text, select, inspect, text, update, ForeignKey, Index, UniqueConstraint, and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -52,10 +52,26 @@ class User(Base):
     created_at: Mapped[str]=mapped_column(String,default=lambda:datetime.now(timezone.utc).isoformat())
     updated_at: Mapped[str]=mapped_column(String,default=lambda:datetime.now(timezone.utc).isoformat())
     status: Mapped[str]=mapped_column(String(20),default="active")
+class Organization(Base):
+    __tablename__="organizations"
+    id: Mapped[str]=mapped_column(String,primary_key=True,default=lambda:str(uuid.uuid4()))
+    name: Mapped[str]=mapped_column(String(200))
+    created_at: Mapped[str]=mapped_column(String,default=lambda:datetime.now(timezone.utc).isoformat())
+    status: Mapped[str]=mapped_column(String(20),default="active")
+class OrganizationMember(Base):
+    __tablename__="organization_members"
+    __table_args__=(UniqueConstraint("organization_id","user_id",name="uq_org_member_user"),)
+    id: Mapped[str]=mapped_column(String,primary_key=True,default=lambda:str(uuid.uuid4()))
+    organization_id: Mapped[str]=mapped_column(ForeignKey("organizations.id",ondelete="CASCADE"),index=True)
+    user_id: Mapped[str]=mapped_column(ForeignKey("users.id",ondelete="CASCADE"),index=True)
+    role: Mapped[str]=mapped_column(String(20),default="OWNER")
+    status: Mapped[str]=mapped_column(String(20),default="active")
+    created_at: Mapped[str]=mapped_column(String,default=lambda:datetime.now(timezone.utc).isoformat())
 class LoginSession(Base):
     __tablename__="sessions"
     id: Mapped[str]=mapped_column(String,primary_key=True,default=lambda:str(uuid.uuid4()))
     user_id: Mapped[str]=mapped_column(ForeignKey("users.id",ondelete="CASCADE"),index=True)
+    active_organization_id: Mapped[Optional[str]]=mapped_column(ForeignKey("organizations.id",ondelete="SET NULL"),nullable=True)
     token_hash: Mapped[str]=mapped_column(String(64),unique=True,index=True)
     created_at: Mapped[str]=mapped_column(String,default=lambda:datetime.now(timezone.utc).isoformat())
     expires_at: Mapped[str]=mapped_column(String,index=True)
@@ -64,6 +80,7 @@ class ApiKey(Base):
     __tablename__="api_keys"
     id: Mapped[str]=mapped_column(String,primary_key=True,default=lambda:str(uuid.uuid4()))
     user_id: Mapped[str]=mapped_column(ForeignKey("users.id",ondelete="CASCADE"),index=True)
+    organization_id: Mapped[Optional[str]]=mapped_column(ForeignKey("organizations.id",ondelete="SET NULL"),nullable=True,index=True)
     name: Mapped[str]=mapped_column(String(100))
     key_prefix: Mapped[str]=mapped_column(String(16))
     key_hash: Mapped[str]=mapped_column(String(64),unique=True,index=True)
@@ -91,6 +108,7 @@ class Record(Base):
     normalized_invoice_number: Mapped[Optional[str]]=mapped_column(String(200),nullable=True)
     document_type: Mapped[Optional[str]]=mapped_column(String(40),nullable=True)
     user_id: Mapped[Optional[str]]=mapped_column(ForeignKey("users.id",ondelete="SET NULL"),nullable=True,index=True)
+    organization_id: Mapped[Optional[str]]=mapped_column(ForeignKey("organizations.id",ondelete="SET NULL"),nullable=True,index=True)
     created_at: Mapped[str] = mapped_column(String, default=lambda: datetime.utcnow().isoformat())
 class AuditEvent(Base):
     __tablename__="invoice_audit"
@@ -136,6 +154,13 @@ class MappingAudit(Base):
     id: Mapped[str]=mapped_column(String,primary_key=True,default=lambda:str(uuid.uuid4()))
     invoice_id: Mapped[str]=mapped_column(ForeignKey("invoices.id",ondelete="CASCADE"),index=True);user_id: Mapped[str]=mapped_column(ForeignKey("users.id",ondelete="CASCADE"),index=True)
     timestamp: Mapped[str]=mapped_column(String,default=lambda:datetime.now(timezone.utc).isoformat());changes_json: Mapped[str]=mapped_column(Text,default="{}")
+
+@event.listens_for(Record,"before_insert")
+def assign_record_workspace(_mapper,_connection,target):
+    if target.organization_id is not None or target.user_id is None:return
+    membership=_connection.execute(select(OrganizationMember.organization_id).where(OrganizationMember.user_id==target.user_id,OrganizationMember.status=="active").order_by(OrganizationMember.created_at)).first()
+    if membership:target.organization_id=membership[0]
+
 Base.metadata.create_all(engine)
 
 # Additive SQLite migration: preserve all pre-existing invoice rows and files.
@@ -143,7 +168,33 @@ if "extraction_json" not in {column["name"] for column in inspect(engine).get_co
     with engine.begin() as conn: conn.execute(text("ALTER TABLE invoices ADD COLUMN extraction_json TEXT NOT NULL DEFAULT '{}'"))
 if "user_id" not in {column["name"] for column in inspect(engine).get_columns("invoices")}:
     with engine.begin() as conn: conn.execute(text("ALTER TABLE invoices ADD COLUMN user_id VARCHAR REFERENCES users(id) ON DELETE SET NULL"))
+if "organization_id" not in {column["name"] for column in inspect(engine).get_columns("invoices")}:
+    with engine.begin() as conn: conn.execute(text("ALTER TABLE invoices ADD COLUMN organization_id VARCHAR REFERENCES organizations(id) ON DELETE SET NULL"))
+legacy_api_keys_need_workspace="organization_id" not in {column["name"] for column in inspect(engine).get_columns("api_keys")}
+legacy_sessions_need_workspace="active_organization_id" not in {column["name"] for column in inspect(engine).get_columns("sessions")}
+for table_name,column_name,ddl in (("sessions","active_organization_id","VARCHAR REFERENCES organizations(id) ON DELETE SET NULL"),("api_keys","organization_id","VARCHAR REFERENCES organizations(id) ON DELETE SET NULL")):
+    if column_name not in {column["name"] for column in inspect(engine).get_columns(table_name)}:
+        with engine.begin() as conn:conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
 with engine.begin() as conn: conn.execute(text("CREATE INDEX IF NOT EXISTS ix_invoices_user_id ON invoices(user_id)"))
+with engine.begin() as conn: conn.execute(text("CREATE INDEX IF NOT EXISTS ix_invoices_organization_id ON invoices(organization_id)"))
+# Every pre-existing account receives its own private workspace. Existing invoice
+# ownership is backfilled only from its current user_id; unowned legacy rows stay unassigned.
+with Session() as migration_db:
+    for existing_user in migration_db.scalars(select(User)).all():
+        membership=migration_db.scalar(select(OrganizationMember).where(OrganizationMember.user_id==existing_user.id))
+        if not membership:
+            organization=Organization(name=existing_user.company_name or "My workspace")
+            migration_db.add(organization);migration_db.flush()
+            migration_db.add(OrganizationMember(organization_id=organization.id,user_id=existing_user.id,role="OWNER"))
+            migration_db.flush()
+            migration_db.execute(update(Record).where(Record.user_id==existing_user.id,Record.organization_id.is_(None)).values(organization_id=organization.id))
+    default_memberships={}
+    for member in migration_db.scalars(select(OrganizationMember).where(OrganizationMember.status=="active").order_by(OrganizationMember.created_at)).all():default_memberships.setdefault(member.user_id,member.organization_id)
+    if legacy_api_keys_need_workspace:
+        for key in migration_db.scalars(select(ApiKey).where(ApiKey.organization_id.is_(None))).all():key.organization_id=default_memberships.get(key.user_id)
+    if legacy_sessions_need_workspace:
+        for login_session in migration_db.scalars(select(LoginSession).where(LoginSession.active_organization_id.is_(None))).all():login_session.active_organization_id=default_memberships.get(login_session.user_id)
+    migration_db.commit()
 columns={column["name"] for column in inspect(engine).get_columns("invoices")}
 with engine.begin() as conn:
     if "file_hash" not in columns:conn.execute(text("ALTER TABLE invoices ADD COLUMN file_hash VARCHAR(64)"))
@@ -156,6 +207,8 @@ with engine.begin() as conn:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_invoices_duplicate_identity ON invoices(user_id,normalized_supplier,normalized_invoice_number,document_type)"))
     conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_user_file_hash ON invoices(user_id,file_hash) WHERE file_hash IS NOT NULL AND user_id IS NOT NULL"))
     conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_user_invoice_identity ON invoices(user_id,normalized_supplier_vat,normalized_invoice_number,document_type) WHERE user_id IS NOT NULL AND normalized_supplier_vat IS NOT NULL AND normalized_invoice_number IS NOT NULL"))
+    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_org_file_hash ON invoices(organization_id,file_hash) WHERE file_hash IS NOT NULL AND organization_id IS NOT NULL"))
+    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_org_invoice_identity ON invoices(organization_id,normalized_supplier_vat,normalized_invoice_number,document_type) WHERE organization_id IS NOT NULL AND normalized_supplier_vat IS NOT NULL AND normalized_invoice_number IS NOT NULL"))
 
 class Status(str, Enum):
     UPLOADED="UPLOADED"; PROCESSING="PROCESSING"; NEEDS_REVIEW="NEEDS_REVIEW"; VALIDATED="VALIDATED"; APPROVED="APPROVED"; FAILED="FAILED"
@@ -257,6 +310,14 @@ class ApiKeyCreatePayload(BaseModel):
     def unique_scopes(cls,value):
         if len(value)!=len(set(value)): raise ValueError("Do not select a permission more than once")
         return value
+class OrganizationMemberPayload(BaseModel):
+    email: str=Field(min_length=3,max_length=320)
+    role: Literal["ADMIN","ACCOUNTANT","APPROVER","VIEWER"]
+class OrganizationMemberUpdatePayload(BaseModel):
+    role: Optional[Literal["ADMIN","ACCOUNTANT","APPROVER","VIEWER"]]=None
+    status: Optional[Literal["active","suspended"]]=None
+class OrganizationSelectionPayload(BaseModel):
+    organization_id: str
 class DeveloperUploadResponse(BaseModel):
     id: str
     status: str
@@ -299,13 +360,25 @@ def valid_email(value: str) -> bool:
 def password_policy(password: str) -> bool:
     return len(password)>=12 and any(c.isalpha() for c in password) and any(c.isdigit() for c in password)
 def token_hash(token: str) -> str: return hashlib.sha256(token.encode("utf-8")).hexdigest()
-def public_user(user: User) -> dict:
-    return {"id":user.id,"first_name":user.first_name,"last_name":user.last_name,"company_name":user.company_name,"email":user.email,"created_at":user.created_at,"updated_at":user.updated_at,"status":user.status}
+def public_user(user: User, db=None, organization_id: Optional[str]=None) -> dict:
+    result={"id":user.id,"first_name":user.first_name,"last_name":user.last_name,"company_name":user.company_name,"email":user.email,"created_at":user.created_at,"updated_at":user.updated_at,"status":user.status}
+    if db is None:
+        with Session() as workspace_db:return public_user(user,workspace_db,organization_id)
+    membership_query=select(OrganizationMember).where(OrganizationMember.user_id==user.id,OrganizationMember.status=="active")
+    if organization_id:membership_query=membership_query.where(OrganizationMember.organization_id==organization_id)
+    membership=db.scalar(membership_query.order_by(OrganizationMember.created_at))
+    if not membership:raise HTTPException(403,"You are not an active member of an organization")
+    organization=db.get(Organization,membership.organization_id)
+    if not organization or organization.status!="active":raise HTTPException(403,"This organization is not active")
+    result["organization_id"]=membership.organization_id
+    result["organization_role"]=membership.role
+    return result
 def cookie_secure(request: Request) -> bool:
     return request.url.scheme=="https" or os.getenv("COOKIE_SECURE","false").lower()=="true"
 def issue_session(response, request: Request, db, user: User):
     raw=secrets.token_urlsafe(32); csrf=secrets.token_urlsafe(32)
-    db.add(LoginSession(user_id=user.id,token_hash=token_hash(raw),expires_at=(datetime.now(timezone.utc)+timedelta(days=SESSION_DAYS)).isoformat()))
+    membership=db.scalar(select(OrganizationMember).where(OrganizationMember.user_id==user.id,OrganizationMember.status=="active").order_by(OrganizationMember.created_at))
+    db.add(LoginSession(user_id=user.id,active_organization_id=membership.organization_id if membership else None,token_hash=token_hash(raw),expires_at=(datetime.now(timezone.utc)+timedelta(days=SESSION_DAYS)).isoformat()))
     db.commit()
     response.set_cookie(SESSION_COOKIE,raw,httponly=True,secure=cookie_secure(request),samesite="lax",max_age=SESSION_DAYS*86400,path="/")
     response.set_cookie(CSRF_COOKIE,csrf,httponly=False,secure=cookie_secure(request),samesite="lax",max_age=SESSION_DAYS*86400,path="/")
@@ -329,9 +402,27 @@ def current_user(request: Request) -> dict:
         try: expired=datetime.fromisoformat(session.expires_at)<=datetime.now(timezone.utc)
         except ValueError: expired=True
         if expired: raise HTTPException(401,"Your session expired. Sign in again.")
+        if not session.active_organization_id:raise HTTPException(403,"Select an active organization to continue")
         user=db.get(User,session.user_id)
         if not user or user.status!="active": raise HTTPException(401,"Sign in to continue")
-        return public_user(user)
+        return public_user(user,db,session.active_organization_id)
+
+def workspace_invoice_filter(user: dict):
+    organization_id=user.get("organization_id")
+    if organization_id:
+        return (Record.organization_id==organization_id,)
+    return (Record.user_id==user["id"],)
+
+def invoice_owner_predicate(user_id: str, organization_id: Optional[str]):
+    if organization_id:return Record.organization_id==organization_id
+    return Record.user_id==user_id
+
+def require_roles(user: dict, *roles: str):
+    if user.get("organization_role") not in roles:
+        raise HTTPException(403,"Your organization role does not allow this action")
+
+def organization_member_dict(member: OrganizationMember, user: User) -> dict:
+    return {"id":member.id,"user_id":user.id,"first_name":user.first_name,"last_name":user.last_name,"email":user.email,"role":member.role,"status":member.status,"created_at":member.created_at}
 
 def api_key_metadata(key: ApiKey) -> dict:
     return {"id":key.id,"name":key.name,"prefix":key.key_prefix,"scopes":json.loads(key.scopes_json),"created_at":key.created_at,"last_used_at":key.last_used_at,"expires_at":key.expires_at,"revoked_at":key.revoked_at}
@@ -357,6 +448,7 @@ def get_api_key_context(credentials: Optional[HTTPAuthorizationCredentials]=Depe
         key=db.scalar(select(ApiKey).where(ApiKey.key_hash==digest))
         if not key or not hmac.compare_digest(key.key_hash,digest) or key.revoked_at:
             raise HTTPException(401,"A valid Bearer API key is required",headers={"WWW-Authenticate":"Bearer"})
+        if not key.organization_id:raise HTTPException(401,"This API key is not bound to an organization",headers={"WWW-Authenticate":"Bearer"})
         if key.expires_at:
             try: expired=datetime.fromisoformat(key.expires_at)<=datetime.now(timezone.utc)
             except ValueError: expired=True
@@ -370,7 +462,7 @@ def get_api_key_context(credentials: Optional[HTTPAuthorizationCredentials]=Depe
         except ValueError: last_used=None
         if last_used is None or (now-last_used).total_seconds()>=60:
             key.last_used_at=now.isoformat();db.commit()
-        return {"user":public_user(user),"key_id":key.id,"scopes":scopes}
+        return {"user":public_user(user,db,key.organization_id),"key_id":key.id,"scopes":scopes}
 
 def require_api_scope(scope: str):
     def dependency(context: dict=Depends(get_api_key_context)):
@@ -393,7 +485,7 @@ def duplicate_assessment(db,record: Record,invoice: Invoice) -> dict:
     record.normalized_supplier=normalize_identity(invoice.supplier_vat_number or invoice.supplier_name)[:200] or None
     record.normalized_invoice_number=normalize_identity(invoice.invoice_number)[:200] or None
     record.document_type=normalize_identity(invoice.document_type or "invoice")[:40] or "invoice"
-    rows=db.scalars(select(Record).where(Record.user_id==record.user_id,Record.id!=record.id,Record.status!="FAILED")).all()
+    rows=db.scalars(select(Record).where(invoice_owner_predicate(record.user_id,record.organization_id),Record.id!=record.id,Record.status!="FAILED")).all()
     candidates=[]
     for row in rows:
         try:other=json.loads(row.invoice_json or "{}")
@@ -470,7 +562,7 @@ def process_invoice(invoice_id: str,user_id: Optional[str]=None):
                 if not r:raise
                 r.invoice_json=invoice.model_dump_json();r.status="NEEDS_REVIEW"
                 duplicate=duplicate_assessment(db,r,invoice)
-            others=[Invoice.model_validate_json(x.invoice_json) for x in db.scalars(select(Record).where(Record.id!=r.id,Record.user_id==r.user_id)).all() if x.invoice_json!="{}"]
+            others=[Invoice.model_validate_json(x.invoice_json) for x in db.scalars(select(Record).where(Record.id!=r.id,invoice_owner_predicate(r.user_id,r.organization_id))).all() if x.invoice_json!="{}"]
             validation_result=assess_invoice(invoice,others,result,duplicate)
             audit(db,r.id,"duplicate_detection",duplicate)
             r.extraction_json=json.dumps(result,default=str)
@@ -502,14 +594,17 @@ def register(payload: RegisterPayload,request: Request):
     with Session() as db:
         if db.scalar(select(User.id).where(User.email==email)): raise HTTPException(409,"An account with this email already exists")
         user=User(first_name=payload.first_name.strip(),last_name=payload.last_name.strip(),company_name=payload.company_name.strip(),email=email,password_hash=PASSWORDS.hash(payload.password))
-        db.add(user)
+        db.add(user);db.flush()
+        organization=Organization(name=user.company_name or "My workspace")
+        db.add(organization);db.flush()
+        db.add(OrganizationMember(organization_id=organization.id,user_id=user.id,role="OWNER"))
         try: db.commit()
         except Exception:
             db.rollback(); raise HTTPException(409,"An account with this email already exists")
         db.refresh(user)
         response=JSONResponse({})
         csrf=issue_session(response,request,db,user)
-        response.body=json.dumps({"user":public_user(user),"csrf_token":csrf}).encode();response.headers["content-length"]=str(len(response.body))
+        response.body=json.dumps({"user":public_user(user,db),"csrf_token":csrf}).encode();response.headers["content-length"]=str(len(response.body))
         return response
 
 @app.post("/api/auth/login",dependencies=[Depends(csrf_protect)])
@@ -538,6 +633,64 @@ def logout(request: Request,user=Depends(current_user)):
 @app.get("/api/auth/me")
 def auth_me(user=Depends(current_user)): return {"user":user}
 
+@app.get("/api/organizations/current")
+def current_organization(user=Depends(current_user)):
+    with Session() as db:
+        organization=db.get(Organization,user.get("organization_id"))
+        if not organization or organization.status!="active":raise HTTPException(404,"Organization not found")
+        return {"id":organization.id,"name":organization.name,"status":organization.status,"role":user["organization_role"],"created_at":organization.created_at}
+
+@app.post("/api/organizations/active",dependencies=[Depends(csrf_protect)])
+def select_active_organization(payload: OrganizationSelectionPayload,request: Request,user=Depends(current_user)):
+    with Session() as db:
+        membership=db.scalar(select(OrganizationMember).where(OrganizationMember.user_id==user["id"],OrganizationMember.organization_id==payload.organization_id,OrganizationMember.status=="active"))
+        if not membership:raise HTTPException(404,"Organization membership not found")
+        raw=request.cookies.get(SESSION_COOKIE)
+        session=db.scalar(select(LoginSession).where(LoginSession.user_id==user["id"],LoginSession.token_hash==token_hash(raw or ""),LoginSession.revoked_at.is_(None)))
+        if not session:raise HTTPException(401,"Sign in to continue")
+        session.active_organization_id=membership.organization_id;db.commit()
+        organization=db.get(Organization,membership.organization_id)
+        return {"id":organization.id,"name":organization.name,"status":organization.status,"role":membership.role,"created_at":organization.created_at}
+
+@app.get("/api/organizations/current/members")
+def list_organization_members(user=Depends(current_user)):
+    with Session() as db:
+        rows=db.execute(select(OrganizationMember,User).join(User,User.id==OrganizationMember.user_id).where(OrganizationMember.organization_id==user.get("organization_id"),OrganizationMember.status=="active").order_by(OrganizationMember.created_at,User.email)).all()
+        return [organization_member_dict(member,member_user) for member,member_user in rows]
+
+@app.post("/api/organizations/current/members",status_code=201,dependencies=[Depends(csrf_protect)])
+def add_organization_member(payload: OrganizationMemberPayload,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN")
+    email=normalized_email(payload.email)
+    if not valid_email(email):raise HTTPException(422,"Enter a valid email address")
+    with Session() as db:
+        account=db.scalar(select(User).where(User.email==email,User.status=="active"))
+        if not account:raise HTTPException(404,"Create an InvoiceAI account for this person before adding them")
+        existing=db.scalar(select(OrganizationMember).where(OrganizationMember.organization_id==user["organization_id"],OrganizationMember.user_id==account.id))
+        if existing:
+            if existing.status=="active":raise HTTPException(409,"This person is already a member")
+            existing.role=payload.role;existing.status="active"
+            db.commit();db.refresh(existing)
+            return organization_member_dict(existing,account)
+        member=OrganizationMember(organization_id=user["organization_id"],user_id=account.id,role=payload.role)
+        db.add(member);db.commit();db.refresh(member)
+        return organization_member_dict(member,account)
+
+@app.patch("/api/organizations/current/members/{member_id}",dependencies=[Depends(csrf_protect)])
+def update_organization_member(member_id: str,payload: OrganizationMemberUpdatePayload,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN")
+    if payload.role is None and payload.status is None:raise HTTPException(422,"Provide a role or status change")
+    with Session() as db:
+        member=db.scalar(select(OrganizationMember).where(OrganizationMember.id==member_id,OrganizationMember.organization_id==user.get("organization_id")))
+        if not member:raise HTTPException(404,"Organization member not found")
+        if member.role=="OWNER":raise HTTPException(403,"The organization owner cannot be changed here")
+        if user["organization_role"]=="ADMIN" and payload.role=="ADMIN":raise HTTPException(403,"Only an owner can grant the admin role")
+        if member.user_id==user["id"] and payload.status=="suspended":raise HTTPException(409,"You cannot suspend your own account membership")
+        if payload.role is not None:member.role=payload.role
+        if payload.status is not None:member.status=payload.status
+        db.commit();account=db.get(User,member.user_id)
+        return organization_member_dict(member,account)
+
 @app.get("/api/profile")
 def get_profile(user=Depends(current_user)): return user
 
@@ -550,7 +703,7 @@ def update_profile(payload: ProfilePayload,user=Depends(current_user)):
         duplicate=db.scalar(select(User.id).where(User.email==email,User.id!=record.id))
         if duplicate: raise HTTPException(409,"An account with this email already exists")
         record.first_name=payload.first_name.strip();record.last_name=payload.last_name.strip();record.company_name=payload.company_name.strip();record.email=email;record.updated_at=datetime.now(timezone.utc).isoformat()
-        db.commit();db.refresh(record);return public_user(record)
+        db.commit();db.refresh(record);return public_user(record,db,user["organization_id"])
 
 @app.post("/api/profile/change-password",dependencies=[Depends(csrf_protect)])
 def change_password(payload: PasswordPayload,request: Request,user=Depends(current_user)):
@@ -570,16 +723,17 @@ def change_password(payload: PasswordPayload,request: Request,user=Depends(curre
 @app.get("/api/profile/api-keys")
 def list_api_keys(user=Depends(current_user)):
     with Session() as db:
-        keys=db.scalars(select(ApiKey).where(ApiKey.user_id==user["id"]).order_by(ApiKey.created_at.desc(),ApiKey.id.desc())).all()
+        keys=db.scalars(select(ApiKey).where(ApiKey.user_id==user["id"],ApiKey.organization_id==user["organization_id"]).order_by(ApiKey.created_at.desc(),ApiKey.id.desc())).all()
         return [api_key_metadata(key) for key in keys]
 
 @app.post("/api/profile/api-keys",status_code=201,dependencies=[Depends(csrf_protect)])
 def create_api_key(payload: ApiKeyCreatePayload,request: Request,user=Depends(current_user)):
+    if "invoices:write" in payload.scopes:require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     rate_limit(request,"api_key_create")
     raw="invai_"+secrets.token_urlsafe(32)
     now=datetime.now(timezone.utc)
     expires_at=(now+timedelta(days=payload.expires_in_days)).isoformat() if payload.expires_in_days is not None else None
-    key=ApiKey(user_id=user["id"],name=payload.name,key_prefix=raw[:14],key_hash=token_hash(raw),scopes_json=json.dumps(payload.scopes),created_at=now.isoformat(),expires_at=expires_at)
+    key=ApiKey(user_id=user["id"],organization_id=user["organization_id"],name=payload.name,key_prefix=raw[:14],key_hash=token_hash(raw),scopes_json=json.dumps(payload.scopes),created_at=now.isoformat(),expires_at=expires_at)
     with Session() as db:
         db.add(key);db.commit();db.refresh(key)
         result=api_key_metadata(key)
@@ -590,7 +744,7 @@ def create_api_key(payload: ApiKeyCreatePayload,request: Request,user=Depends(cu
 @app.delete("/api/profile/api-keys/{key_id}",dependencies=[Depends(csrf_protect)])
 def revoke_api_key(key_id: str,user=Depends(current_user)):
     with Session() as db:
-        key=db.scalar(select(ApiKey).where(ApiKey.id==key_id,ApiKey.user_id==user["id"]))
+        key=db.scalar(select(ApiKey).where(ApiKey.id==key_id,ApiKey.user_id==user["id"],ApiKey.organization_id==user["organization_id"]))
         if not key: raise HTTPException(404,"API key not found")
         if not key.revoked_at: key.revoked_at=datetime.now(timezone.utc).isoformat();db.commit()
         return {"ok":True,"key":api_key_metadata(key)}
@@ -620,7 +774,7 @@ def latest_benchmark():
 @app.get("/api/invoices/{invoice_id}/audit")
 def invoice_audit(invoice_id: str,user=Depends(current_user)):
     with Session() as db:
-        if not db.scalar(select(Record.id).where(Record.id==invoice_id,Record.user_id==user["id"])): raise HTTPException(404,"Invoice not found")
+        if not db.scalar(select(Record.id).where(Record.id==invoice_id,*workspace_invoice_filter(user))): raise HTTPException(404,"Invoice not found")
         rows=db.scalars(select(AuditEvent).where(AuditEvent.invoice_id==invoice_id).order_by(AuditEvent.timestamp)).all()
         return [{"timestamp":x.timestamp,"event_type":x.event_type,"metadata":json.loads(x.metadata_json)} for x in rows]
 
@@ -637,6 +791,7 @@ def list_gl_accounts(active: Optional[bool]=None,search: Optional[str]=Query(def
 
 @app.post("/api/accounting/gl-accounts",dependencies=[Depends(csrf_protect)])
 def create_gl_account(payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     code=str(payload.get("code","")).strip();name=str(payload.get("name","")).strip()
     if not code or len(code)>80 or not name or len(name)>160:raise HTTPException(422,"Account code and name are required")
     with Session() as db:
@@ -648,6 +803,7 @@ def create_gl_account(payload: dict,user=Depends(current_user)):
 
 @app.patch("/api/accounting/gl-accounts/{account_id}",dependencies=[Depends(csrf_protect)])
 def patch_gl_account(account_id: str,payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
         row=db.scalar(select(GLAccount).where(GLAccount.id==account_id,GLAccount.user_id==user["id"]))
         if not row:raise HTTPException(404,"GL account not found")
@@ -665,6 +821,7 @@ def patch_gl_account(account_id: str,payload: dict,user=Depends(current_user)):
 
 @app.delete("/api/accounting/gl-accounts/{account_id}",dependencies=[Depends(csrf_protect)])
 def delete_gl_account(account_id: str,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
         row=db.scalar(select(GLAccount).where(GLAccount.id==account_id,GLAccount.user_id==user["id"]))
         if not row:raise HTTPException(404,"GL account not found")
@@ -683,6 +840,7 @@ def list_tax_codes(active: Optional[bool]=None,jurisdiction: Optional[str]=Query
 
 @app.post("/api/accounting/tax-codes",dependencies=[Depends(csrf_protect)])
 def create_tax_code(payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     code=str(payload.get("code","")).strip();name=str(payload.get("name","")).strip();jurisdiction=str(payload.get("jurisdiction","")).strip().upper();transaction_type=str(payload.get("transaction_type","purchase")).strip().lower();treatment=str(payload.get("treatment","standard")).strip().lower();rate=payload.get("rate")
     if not code or not name or len(code)>80 or len(name)>160 or len(jurisdiction)!=2 or transaction_type not in {"purchase","sale"}:raise HTTPException(422,"Provide a code, name, two-letter jurisdiction, and purchase or sale transaction type")
     if rate is not None:
@@ -698,6 +856,7 @@ def create_tax_code(payload: dict,user=Depends(current_user)):
 
 @app.patch("/api/accounting/tax-codes/{tax_code_id}",dependencies=[Depends(csrf_protect)])
 def patch_tax_code(tax_code_id: str,payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
         row=db.scalar(select(TaxCode).where(TaxCode.id==tax_code_id,TaxCode.user_id==user["id"]))
         if not row:raise HTTPException(404,"Tax code not found")
@@ -716,6 +875,7 @@ def patch_tax_code(tax_code_id: str,payload: dict,user=Depends(current_user)):
 
 @app.delete("/api/accounting/tax-codes/{tax_code_id}",dependencies=[Depends(csrf_protect)])
 def delete_tax_code(tax_code_id: str,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
         row=db.scalar(select(TaxCode).where(TaxCode.id==tax_code_id,TaxCode.user_id==user["id"]))
         if not row:raise HTTPException(404,"Tax code not found")
@@ -739,6 +899,7 @@ def validate_rule_refs(db,user_id,payload):
 
 @app.post("/api/accounting/mapping-rules",dependencies=[Depends(csrf_protect)])
 def create_mapping_rule(payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     name=str(payload.get("name","")).strip();supplier=str(payload.get("supplier_key","")).strip() or None;description=str(payload.get("description_contains","")).strip() or None
     if not name or len(name)>160 or (not supplier and not description):raise HTTPException(422,"A rule needs a name and supplier or description condition")
     with Session() as db:
@@ -748,6 +909,7 @@ def create_mapping_rule(payload: dict,user=Depends(current_user)):
 
 @app.patch("/api/accounting/mapping-rules/{rule_id}",dependencies=[Depends(csrf_protect)])
 def patch_mapping_rule(rule_id: str,payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
         row=db.scalar(select(MappingRule).where(MappingRule.id==rule_id,MappingRule.user_id==user["id"]))
         if not row:raise HTTPException(404,"Mapping rule not found")
@@ -761,6 +923,7 @@ def patch_mapping_rule(rule_id: str,payload: dict,user=Depends(current_user)):
 
 @app.delete("/api/accounting/mapping-rules/{rule_id}",dependencies=[Depends(csrf_protect)])
 def delete_mapping_rule(rule_id: str,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
         row=db.scalar(select(MappingRule).where(MappingRule.id==rule_id,MappingRule.user_id==user["id"]))
         if not row:raise HTTPException(404,"Mapping rule not found")
@@ -775,6 +938,7 @@ def list_supplier_mappings(active: Optional[bool]=None,user=Depends(current_user
 
 @app.post("/api/accounting/suppliers",dependencies=[Depends(csrf_protect)])
 def create_supplier_mapping(payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     supplier_name=normalize_identity(payload.get("supplier_name"))[:200];supplier_vat=normalize_identity(payload.get("supplier_vat_number"))[:64];external_id=str(payload.get("external_id","")).strip()
     if not (supplier_name or supplier_vat) or not external_id or len(external_id)>160:raise HTTPException(422,"Provide a supplier name or VAT ID and an explicitly configured external ID")
     with Session() as db:
@@ -787,6 +951,7 @@ def create_supplier_mapping(payload: dict,user=Depends(current_user)):
 
 @app.patch("/api/accounting/suppliers/{supplier_mapping_id}",dependencies=[Depends(csrf_protect)])
 def patch_supplier_mapping(supplier_mapping_id: str,payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
         row=db.scalar(select(SupplierMapping).where(SupplierMapping.id==supplier_mapping_id,SupplierMapping.user_id==user["id"]))
         if not row:raise HTTPException(404,"Supplier mapping not found")
@@ -799,6 +964,7 @@ def patch_supplier_mapping(supplier_mapping_id: str,payload: dict,user=Depends(c
 
 @app.delete("/api/accounting/suppliers/{supplier_mapping_id}",dependencies=[Depends(csrf_protect)])
 def delete_supplier_mapping(supplier_mapping_id: str,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
         row=db.scalar(select(SupplierMapping).where(SupplierMapping.id==supplier_mapping_id,SupplierMapping.user_id==user["id"]))
         if not row:raise HTTPException(404,"Supplier mapping not found")
@@ -823,18 +989,20 @@ def ensure_stable_line_ids(record: Record) -> dict:
 @app.get("/api/invoices/{invoice_id}/accounting-mapping")
 def get_invoice_mapping(invoice_id: str,user=Depends(current_user)):
     with Session() as db:
-        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        record=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not record:raise HTTPException(404,"Invoice not found")
-        mapping=db.get(InvoiceAccountingMapping,invoice_id)
+        mapping=db.scalar(select(InvoiceAccountingMapping).where(InvoiceAccountingMapping.invoice_id==invoice_id,InvoiceAccountingMapping.user_id==user["id"]))
         return json.loads(mapping.mapping_json) if mapping else {"mapping_status":"UNMAPPED","lines":[]}
 
 @app.post("/api/invoices/{invoice_id}/accounting-mapping/suggest",dependencies=[Depends(csrf_protect)])
 def suggest_invoice_mapping(invoice_id: str,user=Depends(current_user)):
     with Session() as db:
-        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        record=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not record:raise HTTPException(404,"Invoice not found")
         rules,accounts,taxcodes=invoice_mapping_context(db,user["id"])
-        old=db.get(InvoiceAccountingMapping,invoice_id);existing=json.loads(old.mapping_json) if old else {}
+        old=db.get(InvoiceAccountingMapping,invoice_id)
+        if old and old.user_id!=user["id"]:raise HTTPException(403,"Only the user who created this accounting mapping can change it")
+        existing=json.loads(old.mapping_json) if old else {}
         result=AccountingMappingService.suggest(ensure_stable_line_ids(record),rules,accounts,taxcodes,existing)
         if old:old.mapping_json=json.dumps(result);old.updated_at=datetime.now(timezone.utc).isoformat()
         else:db.add(InvoiceAccountingMapping(invoice_id=invoice_id,user_id=user["id"],mapping_json=json.dumps(result)))
@@ -842,15 +1010,18 @@ def suggest_invoice_mapping(invoice_id: str,user=Depends(current_user)):
 
 @app.patch("/api/invoices/{invoice_id}/accounting-mapping",dependencies=[Depends(csrf_protect)])
 def update_invoice_mapping(invoice_id: str,payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     lines=payload.get("lines")
     if not isinstance(lines,list) or not lines:raise HTTPException(422,"At least one mapped line is required")
     with Session() as db:
-        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        record=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not record:raise HTTPException(404,"Invoice not found")
         canonical=ensure_stable_line_ids(record);items={x.get("line_id"):x for x in canonical.get("line_items",[])}
         accounts={x.id:gl_account_json(x) for x in db.scalars(select(GLAccount).where(GLAccount.user_id==user["id"],GLAccount.active.is_(True))).all()}
         taxes={x.id:tax_code_json(x) for x in db.scalars(select(TaxCode).where(TaxCode.user_id==user["id"],TaxCode.active.is_(True))).all()}
-        old=db.get(InvoiceAccountingMapping,invoice_id);previous=json.loads(old.mapping_json) if old else {"lines":[]}
+        old=db.get(InvoiceAccountingMapping,invoice_id)
+        if old and old.user_id!=user["id"]:raise HTTPException(403,"Only the user who created this accounting mapping can change it")
+        previous=json.loads(old.mapping_json) if old else {"lines":[]}
         entries={line.get("line_id"):line for line in previous.get("lines",[])}
         for selection in lines:
             line_id=selection.get("line_id");gl=accounts.get(selection.get("gl_account_id"));tax=taxes.get(selection.get("tax_code_id"))
@@ -866,13 +1037,13 @@ def update_invoice_mapping(invoice_id: str,payload: dict,user=Depends(current_us
 @app.get("/api/invoices/{invoice_id}/duplicates")
 def invoice_duplicates(invoice_id: str,user=Depends(current_user)):
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r:raise HTTPException(404,"Invoice not found")
         try:result=json.loads(r.duplicate_json or "{}")
         except ValueError:result={}
         matches=[]
         for match_id in result.get("matches",[]):
-            match=db.scalar(select(Record).where(Record.id==match_id,Record.user_id==user["id"]))
+            match=db.scalar(select(Record).where(Record.id==match_id,*workspace_invoice_filter(user)))
             if match:
                 invoice=json.loads(match.invoice_json or "{}")
                 matches.append({"id":match.id,"filename":match.filename,"supplier_name":invoice.get("supplier_name"),"invoice_number":invoice.get("invoice_number"),"invoice_date":invoice.get("invoice_date"),"invoice_total":invoice.get("invoice_total"),"currency":invoice.get("currency"),"status":match.status})
@@ -880,10 +1051,11 @@ def invoice_duplicates(invoice_id: str,user=Depends(current_user)):
 
 @app.post("/api/invoices/{invoice_id}/duplicates/override",dependencies=[Depends(csrf_protect)])
 def override_possible_duplicate(invoice_id: str,payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     reason=str(payload.get("reason","")).strip()
     if not 10<=len(reason)<=500:raise HTTPException(422,"Provide an override reason between 10 and 500 characters")
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r:raise HTTPException(404,"Invoice not found")
         duplicate=json.loads(r.duplicate_json or "{}")
         if duplicate.get("classification")!="POSSIBLE_DUPLICATE":raise HTTPException(409,"Only a suspected duplicate can be overridden")
@@ -892,7 +1064,7 @@ def override_possible_duplicate(invoice_id: str,payload: dict,user=Depends(curre
         r.status="NEEDS_REVIEW";r.validation_json="{}";db.commit()
         return duplicate
 
-async def store_invoice_upload(file: UploadFile,user_id: str) -> Record:
+async def store_invoice_upload(file: UploadFile,user_id: str,organization_id: Optional[str]=None) -> Record:
     ext=Path(file.filename or "").suffix.lower(); allowed={".pdf":"application/pdf",".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png"}
     if ext not in allowed: raise HTTPException(415,"Only PDF, JPG, and PNG are supported")
     content=await file.read(MAX_BYTES+1)
@@ -903,16 +1075,16 @@ async def store_invoice_upload(file: UploadFile,user_id: str) -> Record:
         raise HTTPException(415,"File contents do not match the extension")
     digest=hashlib.sha256(content).hexdigest()
     with Session() as db:
-        existing=db.scalar(select(Record).where(Record.user_id==user_id,Record.file_hash==digest))
+        existing=db.scalar(select(Record).where(Record.file_hash==digest,invoice_owner_predicate(user_id,organization_id)))
         if existing:raise HTTPException(409,{"code":"EXACT_FILE_DUPLICATE","message":"This exact document already exists in your workspace.","invoice_id":existing.id})
     ident=str(uuid.uuid4()); clean_name=Path(file.filename or "invoice").name.replace("/","_").replace("\\","_")[:150]; path=DATA/(ident+ext); path.write_bytes(content)
     try:
         with Session() as db:
-            r=Record(id=ident,filename=clean_name,path=str(path),mime=mime,status="UPLOADED",user_id=user_id,file_hash=digest); db.add(r); db.commit();db.refresh(r)
+            r=Record(id=ident,filename=clean_name,path=str(path),mime=mime,status="UPLOADED",user_id=user_id,organization_id=organization_id,file_hash=digest); db.add(r); db.commit();db.refresh(r)
             return r
     except IntegrityError:
         path.unlink(missing_ok=True)
-        with Session() as db:existing=db.scalar(select(Record).where(Record.user_id==user_id,Record.file_hash==digest))
+        with Session() as db:existing=db.scalar(select(Record).where(Record.file_hash==digest,invoice_owner_predicate(user_id,organization_id)))
         if existing:raise HTTPException(409,{"code":"EXACT_FILE_DUPLICATE","message":"This exact document already exists in your workspace.","invoice_id":existing.id})
         raise
 
@@ -921,14 +1093,15 @@ def enqueue_invoice_processing(background: BackgroundTasks,record: Record):
 
 @app.post("/api/invoices",status_code=202)
 async def upload(background: BackgroundTasks,file: UploadFile=File(...),user=Depends(current_user),_csrf=Depends(csrf_protect)):
-    record=await store_invoice_upload(file,user["id"])
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
+    record=await store_invoice_upload(file,user["id"],user.get("organization_id"))
     enqueue_invoice_processing(background,record)
     return {"id":record.id,"filename":record.filename,"status":record.status}
 
 @app.get("/api/invoices")
 def list_invoices(search: str="",user=Depends(current_user)):
     with Session() as db:
-        records=db.scalars(select(Record).where(Record.user_id==user["id"]).order_by(Record.created_at.desc())).all()
+        records=db.scalars(select(Record).where(*workspace_invoice_filter(user)).order_by(Record.created_at.desc())).all()
         result=[record_dict(r) for r in records]
     if search: result=[r for r in result if search.casefold() in json.dumps(r.get("invoice",{}),ensure_ascii=False).casefold() or search.casefold() in r["filename"].casefold()]
     return result
@@ -936,7 +1109,7 @@ def list_invoices(search: str="",user=Depends(current_user)):
 @app.get("/api/invoices/{invoice_id}")
 def get_invoice(invoice_id: str,user=Depends(current_user)):
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r: raise HTTPException(404,"Invoice not found")
         ensure_stable_line_ids(r);db.commit()
         return record_dict(r)
@@ -944,7 +1117,7 @@ def get_invoice(invoice_id: str,user=Depends(current_user)):
 @app.get("/api/invoices/{invoice_id}/document")
 def document(invoice_id: str,user=Depends(current_user)):
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r: raise HTTPException(404,"Invoice not found")
         return FileResponse(r.path,media_type=r.mime,filename=r.filename,content_disposition_type="inline")
 
@@ -975,13 +1148,14 @@ def api_document_path(record: Record) -> Path:
 
 @app.post("/api/v1/invoices",status_code=202,response_model=DeveloperUploadResponse,tags=["Developer API v1"],summary="Upload an invoice",description="Required scope: `invoices:write`. Accepts one PDF, JPG, or PNG and queues the existing extraction pipeline.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:write"},413:{"description":"Upload exceeds 10 MB"},415:{"description":"Unsupported type or content mismatch"},429:{"description":"Per-key rate limit exceeded"}})
 async def developer_upload_invoice(background: BackgroundTasks,file: UploadFile=File(...),auth: dict=Depends(require_api_scope("invoices:write"))):
-    record=await store_invoice_upload(file,auth["user"]["id"])
+    require_roles(auth["user"],"OWNER","ADMIN","ACCOUNTANT")
+    record=await store_invoice_upload(file,auth["user"]["id"],auth["user"].get("organization_id"))
     enqueue_invoice_processing(background,record)
     return DeveloperUploadResponse(id=record.id,status=record.status,message="Invoice accepted for processing",status_url=f"/api/v1/invoices/{record.id}")
 
-@app.get("/api/v1/invoices",response_model=DeveloperInvoicePage,tags=["Developer API v1"],summary="List invoices",description="Required scope: `invoices:read`. Results are scoped to the API key owner and ordered by creation time and ID descending.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:read"},422:{"description":"Invalid cursor or query parameter"},429:{"description":"Per-key rate limit exceeded"}})
+@app.get("/api/v1/invoices",response_model=DeveloperInvoicePage,tags=["Developer API v1"],summary="List invoices",description="Required scope: `invoices:read`. Results are scoped to the organization bound to the API key and ordered by creation time and ID descending.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:read"},422:{"description":"Invalid cursor or query parameter"},429:{"description":"Per-key rate limit exceeded"}})
 def developer_list_invoices(limit: int=Query(default=20,ge=1,le=100),cursor: Optional[str]=None,status: Optional[Status]=None,search: Optional[str]=Query(default=None,max_length=200),auth: dict=Depends(require_api_scope("invoices:read"))):
-    filters=[Record.user_id==auth["user"]["id"]]
+    filters=[*workspace_invoice_filter(auth["user"])]
     if status is not None: filters.append(Record.status==status.value)
     if search:
         pattern="%"+search.strip()+"%"
@@ -998,7 +1172,7 @@ def developer_list_invoices(limit: int=Query(default=20,ge=1,le=100),cursor: Opt
 @app.get("/api/v1/invoices/{invoice_id}",response_model=DeveloperInvoiceDetail,tags=["Developer API v1"],summary="Get invoice details",description="Required scope: `invoices:read`. Sensitive paths and raw model output are not included.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:read"},404:{"description":"Invoice not found"},429:{"description":"Per-key rate limit exceeded"}})
 def developer_get_invoice(invoice_id: str,auth: dict=Depends(require_api_scope("invoices:read"))):
     with Session() as db:
-        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==auth["user"]["id"]))
+        record=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(auth["user"])))
         if not record: raise HTTPException(404,"Invoice not found")
         try: invoice=json.loads(record.invoice_json or "{}")
         except ValueError: invoice={}
@@ -1015,7 +1189,7 @@ def developer_get_invoice(invoice_id: str,auth: dict=Depends(require_api_scope("
 @app.get("/api/v1/invoices/{invoice_id}/json",response_model=DeveloperInvoiceJson,tags=["Developer API v1"],summary="Get canonical invoice JSON",description="Required scope: `invoices:read`. Returns the latest saved invoice data as unapproved unless the invoice has been explicitly approved.",responses={401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:read"},404:{"description":"Invoice not found"},409:{"description":"Extraction is still running or failed"},429:{"description":"Per-key rate limit exceeded"}})
 def developer_invoice_json(invoice_id: str,auth: dict=Depends(require_api_scope("invoices:read"))):
     with Session() as db:
-        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==auth["user"]["id"]))
+        record=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(auth["user"])))
         if not record: raise HTTPException(404,"Invoice not found")
         if record.status in ("UPLOADED","PROCESSING"):
             raise HTTPException(409,{"code":"processing","status":record.status,"message":"Invoice extraction is still in progress. Poll the status URL before requesting JSON."})
@@ -1029,7 +1203,7 @@ def developer_invoice_json(invoice_id: str,auth: dict=Depends(require_api_scope(
 @app.get("/api/v1/invoices/{invoice_id}/document",tags=["Developer API v1"],summary="Download original invoice",description="Required scope: `invoices:document:read`. Returns the original uploaded file as an attachment.",responses={200:{"description":"Original PDF or image","content":{"application/pdf":{},"image/jpeg":{},"image/png":{}}},401:{"description":"Missing or invalid API key"},403:{"description":"API key lacks invoices:document:read"},404:{"description":"Invoice or document not found"},429:{"description":"Per-key rate limit exceeded"}})
 def developer_invoice_document(invoice_id: str,auth: dict=Depends(require_api_scope("invoices:document:read"))):
     with Session() as db:
-        record=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==auth["user"]["id"]))
+        record=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(auth["user"])))
         if not record: raise HTTPException(404,"Invoice not found")
         path=api_document_path(record)
         mime=record.mime if record.mime in {"application/pdf","image/jpeg","image/png"} else "application/octet-stream"
@@ -1037,10 +1211,11 @@ def developer_invoice_document(invoice_id: str,auth: dict=Depends(require_api_sc
 
 @app.patch("/api/invoices/{invoice_id}",dependencies=[Depends(csrf_protect)])
 def correct(invoice_id: str, payload: dict,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     try: inv=Invoice.model_validate(payload)
     except Exception as e: raise HTTPException(422,str(e))
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r: raise HTTPException(404,"Invoice not found")
         if r.status in ("APPROVED",): raise HTTPException(409,"Approved invoices cannot be edited")
         metadata,changes=correction_metadata(json.loads(r.invoice_json or "{}"),inv,json.loads(r.extraction_json or "{}"))
@@ -1050,11 +1225,12 @@ def correct(invoice_id: str, payload: dict,user=Depends(current_user)):
 
 @app.post("/api/invoices/{invoice_id}/validate",dependencies=[Depends(csrf_protect)])
 def validate_endpoint(invoice_id: str,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT","APPROVER")
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r: raise HTTPException(404,"Invoice not found")
         inv=Invoice.model_validate_json(r.invoice_json)
-        others=[Invoice.model_validate_json(x.invoice_json) for x in db.scalars(select(Record).where(Record.id!=invoice_id,Record.user_id==user["id"])).all() if x.invoice_json!="{}"]
+        others=[Invoice.model_validate_json(x.invoice_json) for x in db.scalars(select(Record).where(Record.id!=invoice_id,*workspace_invoice_filter(user))).all() if x.invoice_json!="{}"]
         metadata=json.loads(r.extraction_json or "{}")
         duplicate=duplicate_assessment(db,r,inv)
         result=assess_invoice(inv,others,metadata,duplicate)
@@ -1065,8 +1241,9 @@ def validate_endpoint(invoice_id: str,user=Depends(current_user)):
 
 @app.post("/api/invoices/{invoice_id}/approve",dependencies=[Depends(csrf_protect)])
 def approve(invoice_id: str,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","APPROVER")
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r: raise HTTPException(404,"Invoice not found")
         ensure_stable_line_ids(r)
         duplicate=duplicate_assessment(db,r,Invoice.model_validate_json(r.invoice_json))
@@ -1079,8 +1256,9 @@ def approve(invoice_id: str,user=Depends(current_user)):
 
 @app.get("/api/invoices/{invoice_id}/export")
 def export(invoice_id: str,user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r: raise HTTPException(404,"Invoice not found")
         if r.status!="APPROVED": raise HTTPException(409,"Only approved invoices can be exported")
         return JSONResponse(json.loads(r.invoice_json),headers={"Content-Disposition":f'attachment; filename="{invoice_id}.json"'})
@@ -1107,8 +1285,9 @@ class MoneybirdAdapter(AccountingAdapter):
 
 @app.post("/api/invoices/{invoice_id}/sync/moneybird",dependencies=[Depends(csrf_protect)])
 def sync_moneybird(invoice_id: str, config: dict={},user=Depends(current_user)):
+    require_roles(user,"OWNER","ADMIN","ACCOUNTANT")
     with Session() as db:
-        r=db.scalar(select(Record).where(Record.id==invoice_id,Record.user_id==user["id"]))
+        r=db.scalar(select(Record).where(Record.id==invoice_id,*workspace_invoice_filter(user)))
         if not r: raise HTTPException(404,"Invoice not found")
         if r.status!="APPROVED": raise HTTPException(409,"Approve invoice before synchronization")
         previous=json.loads(r.sync_json or "{}")

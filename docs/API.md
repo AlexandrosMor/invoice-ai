@@ -107,7 +107,7 @@ The default limit is 120 requests per API key per minute. Set `API_RATE_LIMIT_PE
 
 ## Duplicate review and accounting mappings
 
-The browser endpoints remain session-authenticated and user-scoped:
+The browser endpoints remain session-authenticated and organization-scoped. A session's active workspace is checked against active membership on every request. `POST /api/organizations/active` may select only a workspace the signed-in user belongs to. API keys are bound to one organization when created and cannot select a workspace.
 
 | Method and path | Description |
 | --- | --- |
@@ -124,7 +124,7 @@ The browser endpoints remain session-authenticated and user-scoped:
 
 GL accounts, tax codes, supplier references, and rules are private to the signed-in user. Suggestions match exact supplier rules before general customer rules; tax defaults require an explicit jurisdiction and matching purchase VAT treatment. A percentage by itself is not enough. Mapping decisions are stored separately from the canonical invoice JSON and changes are audited. The mock Moneybird adapter only returns a successful draft when every line has a confirmed GL and tax mapping with explicitly configured external IDs; it never calls Moneybird.
 
-An identical file upload within one workspace returns `409 EXACT_FILE_DUPLICATE` with the existing invoice ID. Uploading the same bytes into a different account is allowed. Exact invoice identity (matching supplier VAT ID, invoice number, and document type) is confirmed and blocks approval. A supplier-name-only or similar document match is a possible duplicate warning; review the linked invoice and record an override reason when appropriate.
+An identical file upload within one workspace returns `409 EXACT_FILE_DUPLICATE` with the existing invoice ID. Uploading the same bytes into a different organization is allowed. Exact invoice identity (matching supplier VAT ID, invoice number, and document type) is confirmed and blocks approval. A supplier-name-only or similar document match is a possible duplicate warning; review the linked invoice and record an override reason when appropriate.
 
 ## OpenAPI
 

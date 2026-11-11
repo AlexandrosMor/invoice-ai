@@ -1,5 +1,20 @@
 # Architecture and data flow
 
+## Organization workspace foundation
+
+```mermaid
+flowchart TD
+    U["Authenticated user"] --> M["Active organization membership"]
+    M --> I["Organization-scoped invoice queries"]
+    K["Scoped API key"] -->|bound to organization at creation| I
+    I --> V["Existing extraction, validation, duplicate checks"]
+    V --> R["Existing review and approval workflow"]
+    M -. "planned: organization policies and routed approvals" .-> R
+    S["Suppliers, agreements, POs: planned"] -.-> V
+```
+
+Implemented in this foundation: private organizations are created during registration, existing user-owned invoices are assigned to that user's private organization, membership roles are checked in FastAPI, and the browser session selects an organization only after membership is verified. API keys are bound to the creator's active organization and cannot supply an organization ID. Members must already have an InvoiceAI account; invitations and multi-stage approval routing are future work. Accounting configuration and audit data retain their existing user ownership pending a separately reviewed migration.
+
 ```text
 Browser or developer API → FastAPI upload/controller → local file + SQLite record
                                       ↓ background task
@@ -21,11 +36,11 @@ Browser or developer API → FastAPI upload/controller → local file + SQLite r
 
 All strategies normalize into the same Pydantic `Invoice` and use the same downstream duplicate detection and validation. Mathematical reconciliation is only one signal and does not prove extraction correctness. Normalization accepts Dutch/English written months and unambiguous numeric dates; ambiguous numeric dates stay unchanged and trigger review/fallback.
 
-The SQLAlchemy `Record` is the local repository boundary in this small PoC. It persists status, original path, SHA-256 file hash, normalized invoice identity, canonical invoice JSON, validation, duplicate decisions, synchronization result, extraction metadata, and an optional user owner. Additive SQLite setup adds new columns and tables without dropping invoice rows or files. SQLite also stores user accounts and hashed server-side sessions. Invoice queries always filter by the authenticated user; legacy records remain unassigned until explicitly assigned with the documented command. The API layer handles HTTP validation and workflow transitions. Upload starts a background task and returns immediately. The task moves through `UPLOADED`, `PROCESSING`, and `NEEDS_REVIEW` or `FAILED`.
+The SQLAlchemy `Record` is the local repository boundary in this small PoC. It persists status, original path, SHA-256 file hash, normalized invoice identity, canonical invoice JSON, validation, duplicate decisions, synchronization result, extraction metadata, uploader, and organization. Additive SQLite setup creates organizations and memberships, adds organization ownership to invoices, and backfills each user's existing invoices into that user's private workspace without dropping invoice rows or files. Rows without a user owner remain unassigned. The API layer handles HTTP validation and workflow transitions. Upload starts a background task and returns immediately. The task moves through `UPLOADED`, `PROCESSING`, and `NEEDS_REVIEW` or `FAILED`.
 
-Authentication uses Argon2id password hashes, opaque random session tokens stored only as hashes, HttpOnly same-site cookies, CSRF token checks on writes, and a basic process-local authentication rate limit. This is a local multi-user foundation, not production identity infrastructure: email is not verified, rate limits are not shared across workers, and recovery/admin workflows are not provided.
+Authentication uses Argon2id password hashes, opaque random session tokens stored only as hashes, HttpOnly same-site cookies, CSRF token checks on writes, and a basic process-local authentication rate limit. A session's active organization must be an active membership; API keys carry a fixed organization binding and continue to use their existing invoice read/write scopes. Roles are enforced on invoice upload/correction, accounting changes, duplicate overrides, and approval. This is a local multi-user foundation, not production identity infrastructure: email is not verified, rate limits are not shared across workers, invitations and recovery/admin workflows are not provided.
 
-Duplicate classification is a separate workspace-scoped service. An exact file hash is protected by a partial unique SQLite index on `(user_id, file_hash)` and repeated uploads return the existing same-user invoice reference. Invoice identity compares normalized supplier VAT, invoice number, and document type; supplier-name-only matches remain possible warnings. Confirmed duplicates block approval. Possible duplicates require a recorded reason before approval and generate an audit event. Cross-user candidates are never queried or returned.
+Duplicate classification is a separate organization-scoped service. An exact file hash and invoice identity are protected by partial unique SQLite indexes on organization ownership, and repeated uploads return an existing workspace invoice reference. Invoice identity compares normalized supplier VAT, invoice number, and document type; supplier-name-only matches remain possible warnings. Confirmed duplicates block approval. Possible duplicates require a recorded reason before approval and generate an audit event. Cross-organization candidates are never queried or returned.
 
 Accounting configuration is separate from canonical invoice facts. `GLAccount`, `TaxCode`, `MappingRule`, `SupplierMapping`, and `InvoiceAccountingMapping` are user-owned records. Deterministic suggestions favor exact supplier rules, then customer rules, and remain unconfirmed; VAT defaults require explicit jurisdiction and treatment context. Manual choices are associated with stable line IDs and audited. The mock `MoneybirdAdapter` uses configured external GL and tax IDs and reports an actionable error when a mapping is missing. It never calls Moneybird or invents provider IDs.
 

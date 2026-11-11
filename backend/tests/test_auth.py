@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 import app as app_module
-from app import Base, User, LoginSession, Record
+from app import Base, User, LoginSession, ApiKey, Record
 app=app_module.app
 
 @pytest.fixture
@@ -106,4 +106,54 @@ def test_invoice_operations_are_isolated_by_session_user(web):
     assert client_b.get("/api/invoices/a-invoice/export").status_code==404
     assert client_b.get("/api/invoices/a-invoice/audit").status_code==404
     client_b.close()
+
+def test_organization_members_share_only_their_workspace_and_roles_gate_writes(web):
+    owner,factory,tmp=web
+    owner_result=register(owner,"org-owner@example.test")
+    teammate=TestClient(app)
+    teammate_result=register(teammate,"org-teammate@example.test")
+    outsider=TestClient(app)
+    register(outsider,"org-outsider@example.test")
+    owner_org=owner.get("/api/organizations/current").json()
+    teammate_org=teammate.get("/api/organizations/current").json()
+    outsider_org=outsider.get("/api/organizations/current").json()
+    assert owner_org["id"]!=teammate_org["id"]!=outsider_org["id"]
+    path=tmp/"organization.pdf";path.write_bytes(b"%PDF synthetic")
+    with factory() as db:
+        owner_user=db.scalar(select(User).where(User.email=="org-owner@example.test"))
+        db.add(Record(id="org-invoice",filename="org.pdf",path=str(path),mime="application/pdf",status="NEEDS_REVIEW",invoice_json=json.dumps({"invoice_number":"ORG-1"}),user_id=owner_user.id,organization_id=owner_org["id"]))
+        db.commit()
+    headers={"X-CSRF-Token":owner_result["csrf_token"]}
+    added=owner.post("/api/organizations/current/members",headers=headers,json={"email":"org-teammate@example.test","role":"VIEWER"})
+    assert added.status_code==201,added.text
+    private_key=teammate.post("/api/profile/api-keys",headers={"X-CSRF-Token":teammate_result["csrf_token"]},json={"name":"Private workspace","scopes":["invoices:read"]}).json()
+    activated=teammate.post("/api/organizations/active",headers={"X-CSRF-Token":teammate_result["csrf_token"]},json={"organization_id":owner_org["id"]})
+    assert activated.status_code==200,activated.text
+    assert teammate.get("/api/organizations/current").json()["id"]==owner_org["id"]
+    assert [row["id"] for row in teammate.get("/api/invoices").json()]==["org-invoice"]
+    assert teammate.get("/api/invoices/org-invoice/export").status_code==403
+    assert teammate.post("/api/invoices/org-invoice/sync/moneybird",headers={"X-CSRF-Token":teammate_result["csrf_token"]},json={}).status_code==403
+    private_workspace_invoices=teammate.get("/api/v1/invoices",headers={"Authorization":"Bearer "+private_key["api_key"]})
+    assert private_workspace_invoices.status_code==200 and private_workspace_invoices.json()["items"]==[]
+    denied_write_key=teammate.post("/api/profile/api-keys",headers={"X-CSRF-Token":teammate_result["csrf_token"]},json={"name":"No write","scopes":["invoices:write"]})
+    assert denied_write_key.status_code==403
+    shared_key=teammate.post("/api/profile/api-keys",headers={"X-CSRF-Token":teammate_result["csrf_token"]},json={"name":"Shared workspace","scopes":["invoices:read"]}).json()
+    shared_workspace_invoices=teammate.get("/api/v1/invoices",headers={"Authorization":"Bearer "+shared_key["api_key"]})
+    assert [row["id"] for row in shared_workspace_invoices.json()["items"]]==["org-invoice"]
+    assert [row["name"] for row in teammate.get("/api/profile/api-keys").json()]==["Shared workspace"]
+    with factory() as db:
+        assert db.get(ApiKey,private_key["id"]).organization_id==teammate_org["id"]
+        assert db.get(ApiKey,shared_key["id"]).organization_id==owner_org["id"]
+    assert outsider.get("/api/invoices/org-invoice").status_code==404
+    upload_headers={"X-CSRF-Token":teammate_result["csrf_token"]}
+    rejected=teammate.post("/api/invoices",headers=upload_headers,files={"file":("new.pdf",b"%PDF synthetic upload","application/pdf")})
+    assert rejected.status_code==403
+    changed=owner.patch("/api/organizations/current/members/"+added.json()["id"],headers=headers,json={"role":"ACCOUNTANT"})
+    assert changed.status_code==200 and changed.json()["role"]=="ACCOUNTANT"
+    accepted=teammate.post("/api/invoices",headers=upload_headers,files={"file":("new.pdf",b"%PDF synthetic upload","application/pdf")})
+    assert accepted.status_code==202,accepted.text
+    with factory() as db:
+        uploaded=db.get(Record,accepted.json()["id"])
+        assert uploaded.organization_id==owner_org["id"] and uploaded.user_id!=db.scalar(select(User.id).where(User.email=="org-owner@example.test"))
+    teammate.close();outsider.close()
 
